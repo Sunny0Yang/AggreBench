@@ -1,0 +1,42 @@
+[
+  {
+    "qa_id": 1,
+    "conversation_id": "conv_1",
+    "question": "What is the total number of years mentioned in Caroline's transition journey, her support from friends, and Melanie's marriage duration across the two sessions?",
+    "gold": "The answer is: 12",
+    "gold_evidence": [
+      "D3:1: '...since I started transitioning three years ago.'",
+      "D3:13: '...I've known these friends for 4 years...'",
+      "D19:16: '...5 years already! Time flies...'"
+    ],
+    "session_ids": [
+      "conv_1_session_3",
+      "conv_1_session_19"
+    ],
+    "technique": "Mem0",
+    "response": "",
+    "memories_used": [],
+    "latency": 0,
+    "tokens_used": 0
+  },
+  {
+    "qa_id": 2,
+    "conversation_id": "conv_2",
+    "question": "How many times did Jon express gratitude for Gina's support in his dance studio venture across these sessions?",
+    "gold": "The answer is: 3",
+    "gold_evidence": [
+      "D11:13: 'Your help means a lot.'",
+      "D11:21: 'Your help really means a lot.'",
+      "D17:16: 'Your belief in me means the world.'"
+    ],
+    "session_ids": [
+      "conv_2_session_11",
+      "conv_2_session_17"
+    ],
+    "technique": "Mem0",
+    "response": "",
+    "memories_used": [],
+    "latency": 0,
+    "tokens_used": 0
+  }
+]

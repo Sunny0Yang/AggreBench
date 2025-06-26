@@ -1,0 +1,7 @@
+# mem0
+mem0ai
+dotenv
+langgraph
+langmem
+jinja2
+zep_cloud
