@@ -26,16 +26,16 @@ def qa_generation_args(parser):
                         default=os.getenv('QA_DIR'),
                         help='Output directory for QA pairs')
 
-    parser.add_argument('--min_sessions', type=int, default=1,
+    parser.add_argument('--min_sessions', type=int, default=2,
                         help='Min number of sessions per QA')
-    parser.add_argument('--max_sessions', type=int, default=2,
+    parser.add_argument('--max_sessions', type=int, default=5,
                         help='Max number of sessions per QA')
     parser.add_argument('--min_evidences', type=int, default=5,
                         help='Min number of evidences per question')
     parser.add_argument('--max_evidences', type=int, default=10,
                         help='Max number of evidences per question')
-    parser.add_argument('--num_qa', type=int, default=20,
-                        help='Number of QA pairs to generate')
+    parser.add_argument('--num_qa', type=int, default=10,
+                        help='Number of QA pairs per conversation to generate')
     return parser
 
 
