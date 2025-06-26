@@ -124,7 +124,12 @@ class QuestionGenerator:
         """解析LLM响应为结构化字典"""
         try:
             import json
-            return json.loads(response.strip())
+            import re
+            temp = json.loads(response.strip())
+            match = re.search(r"^The answer is: (\d+)$")
+            if match:
+                temp["answer"] = match.group(1)
+            return temp
         except json.JSONDecodeError:
             # 尝试提取JSON部分
             import re
