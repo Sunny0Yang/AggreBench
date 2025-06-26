@@ -1,0 +1,7 @@
+artifacts/processed/*
+artifacts/qa/*
+artifacts/raw/*
+
+logs/
+*.log
+__pycache__/

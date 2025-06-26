@@ -1,0 +1,43 @@
+# src/utils/struct.py
+# 单个对话回合表示
+class DialogueTurn:
+    def __init__(self, turn_id, speaker, content):
+        self.id = turn_id
+        self.speaker = speaker
+        self.content = content
+# 扩展的对话回合表示
+class MultiModalTurn:
+    def __init__(self, turn_id, speaker, content, 
+                 img_urls=None, blip_caption=None, query=None):
+        self.id = turn_id
+        self.speaker = speaker
+        self.text_content = content  # 原始文本内容
+        self.img_urls = img_urls or []  # 图片URL列表
+        self.blip_caption = blip_caption  # 图片描述
+        self.query = query  # 搜索查询词
+        # 生成综合内容（文本+图片描述(no url)）
+        self.content = self._generate_combined_content()
+    def _generate_combined_content(self) -> str:
+        """生成组合文本内容，融合多模态信息"""
+        content = self.text_content
+        # 添加图片描述
+        if self.blip_caption:
+            content += f" [图片描述: {self.blip_caption}]"
+        # 添加搜索查询
+        if self.query:
+            content += f" [相关搜索: {self.query}]"
+        return content
+    def __repr__(self):
+        return f"<MultiModalTurn {self.id}: {self.speaker} - {self.text_content[:30]}...>"
+# 会话表示
+class Session:
+    def __init__(self, session_id, time, participants, turns):
+        self.id = session_id
+        self.time = time
+        self.participants = participants
+        self.turns = turns  # DialogueTurn列表
+        
+# 数据集表示
+class ConversationDataset:
+    def __init__(self, sessions):
+        self.sessions = sessions  # Session对象列表
