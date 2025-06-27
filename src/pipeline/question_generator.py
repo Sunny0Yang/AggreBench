@@ -223,7 +223,8 @@ def main():
     
     # 保存结果
     os.makedirs(args.output_dir, exist_ok=True)
-    filename = f"{os.path.splitext(os.path.basename(args.input_data))[0]}_qa.json"
+    temp = (os.path.splitext(os.path.basename(args.input_data))[0]).split("_")[0]
+    filename = f"{temp}_qa.json"
     output_path = os.path.join(args.output_dir, filename)
     save_results(results, output_path)
     
