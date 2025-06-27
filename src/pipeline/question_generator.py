@@ -61,7 +61,7 @@ class QuestionGenerator:
                     qa_dict["conversation_id"] = conversation.id
                     qa_dict["session_ids"] = [s.id for s in selected_sessions]
                     qa_dict["qa_index"] = qa_index + idx * self.num_qa
-                    
+                    qa_dict["participants"] = conversation.speakers
                     all_qa.append(qa_dict)
         
         return all_qa
@@ -126,9 +126,9 @@ class QuestionGenerator:
             import json
             import re
             temp = json.loads(response.strip())
-            match = re.search(r"^The answer is: (\d+)$")
+            match = re.search(r"^The answer is:\s*([0-9]+(?:\.[0-9]+)?)", temp["answer"])
             if match:
-                temp["answer"] = match.group(1)
+                temp["answer"] = float(match.group(1))
             return temp
         except json.JSONDecodeError:
             # 尝试提取JSON部分

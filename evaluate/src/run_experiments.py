@@ -78,28 +78,29 @@ def process_qa(manager: MemoryManager, qa: dict, dataset: dict) -> dict:
         "tokens_used": 0
     }
     
-    try:
-        # 添加相关会话到记忆
-        add_memories_for_qa(manager, qa, dataset)
-    except Exception as e:
-        logger.error(f"添加记忆失败{result['qa_id']}: {str(e)}")
-        result["error"] = str(e)    
-    # try:    # 执行搜索和生成
-    #     start_time = datetime.now()
-    #     memories = manager.mem_search(qa['question'])
-    #     response = manager.generate_response(qa['question'], memories)
-    #     latency = (datetime.now() - start_time).total_seconds()
-        
-    #     # 更新结果
-    #     result.update({
-    #         "response": response,
-    #         "memories_used": memories,
-    #         "latency": latency,
-    #         "tokens_used": manager.get_token_count()
-    #     })
+    # try:
+    #     # 添加相关会话到记忆
+    #     add_memories_for_qa(manager, qa, dataset)
     # except Exception as e:
-    #     logger.error(f"处理QA失败 {result['qa_id']}: {str(e)}")
-    #     result["error"] = str(e)
+    #     logger.error(f"添加记忆失败{result['qa_id']}: {str(e)}")
+    #     result["error"] = str(e)    
+    try:    # 执行搜索和生成
+        start_time = datetime.now()
+        memories = manager.mem_search(qa)
+        logger.info(f"########搜索完成#########")
+        response = manager.generate_response(qa['question'], memories)
+        latency = (datetime.now() - start_time).total_seconds()
+        
+        # 更新结果
+        result.update({
+            "response": response,
+            "memories_used": memories,
+            "latency": latency,
+            "tokens_used": manager.get_token_count()
+        })
+    except Exception as e:
+        logger.error(f"处理QA失败 {result['qa_id']}: {str(e)}")
+        result["error"] = str(e)
     
     return result
 
