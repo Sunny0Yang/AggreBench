@@ -102,33 +102,64 @@ class QuestionGenerator:
         return hash(session_id)
 
     def _build_session_context(self, sessions: List[Session]) -> str:
-        """构建会话上下文表示"""
+        """构建会话上下文表示（支持结构化数据）"""
         context = ""
         for session in sessions:
-            context += f"### session {session.id}\n"
-            context += f"time: {session.time}\n"
-            context += f"participants: {', '.join(session.participants)}\n"
-            context += "dialogs:\n"
-            for turn in session.turns:
-                context += f"Turn_ID:{turn.id} \n {turn.speaker}: {turn.content}\n"
+            context += f"### Session ID: {session.id}\n"
+            
+            # 检测是否是表格数据
+            is_table_data = "table" in session.id.lower() or any("row" in turn.id for turn in session.turns)
+            
+            if is_table_data:
+                # 表格数据处理
+                context += "Data Type: Structured Table\n"
+                # 添加数据行
+                context += "Data Rows:\n"
+                for turn in session.turns:
+                    if "Row" in turn.content:
+                        context += f"- {turn.content}\n"
+            else:
+                # 常规对话处理
+                context += f"Time: {session.time}\n"
+                context += f"Participants: {', '.join(session.participants)}\n"
+                context += "Dialogs:\n"
+                for turn in session.turns:
+                    context += f"Turn {turn.id}: {turn.speaker}: {turn.content}\n"
+            
             context += "\n"
+
+        print(context)  # DEBUG
+        # exit(0)
         return context
 
     def generate_qa(self, session_context: str) -> str:
         """生成单个QA对"""
-        prompt_template_key = f"{self.difficulty}_aggregation_template_en" # 根据难度选择模板
-        if prompt_template_key not in QA_GENERATION_PROMPTS:
-            self.logger.error(f"未找到难度等级 '{self.difficulty}' 对应的提示词模板。使用默认模板。")
-            prompt_template_key = "easy_aggregation_template_en" # 回退到默认模板
+        # 检测是否是结构化数据
+        is_structured = "structured table" in session_context.lower()
+        # print(f"Is structured: {is_structured}")  # DEBUG
+        # 选择模板
+        if is_structured:
+            prompt_template_key = f"structured_{self.difficulty}_template_en"
+            system_role = "You are a structured data analyst specializing in generating aggregation queries on structured tables."
+        else:
+            prompt_template_key = f"conversational_{self.difficulty}_template_en"
+            system_role = "You are a conversation analyst specializing in generating aggregation queries on conversational data."
         
+        # 模板回退逻辑
+        if prompt_template_key not in QA_GENERATION_PROMPTS:
+            self.logger.warning(f"未找到模板 '{prompt_template_key}'，使用默认模板")
+            prompt_template_key = "structured_medium_template_en" if is_structured else "conversational_medium_template_en"
+        
+        # 构建提示词
         prompt = QA_GENERATION_PROMPTS[prompt_template_key].format(
             session_context=session_context,
             session_threshold=self.session_threshold,
             min_evidences=self.min_evidences,
             max_evidences=self.max_evidences
         )
+        
         messages = [
-            {"role": "system", "content": "You are a data analysis assistant specializing in generating aggregation queries of varying difficulty levels."},
+            {"role": "system", "content": system_role},
             {"role": "user", "content": prompt},
         ]
         self.logger.info(f"正在为难度 '{self.difficulty}' 生成QA...")
