@@ -8,10 +8,12 @@ source scripts/env.sh
 python -m src.pipeline.question_generator \
     "$PROCESSED_DATA_DIR/locomo10_processed.json" \
     --model "qwen3-32b" \
-    --min_sessions 2 \
-    --max_sessions 5 \
-    --min_evidences 3 \
-    --max_evidences 8 \
+    --min_sessions 5 \
+    --max_sessions 10 \
+    --session_threshold 2 \
+    --min_evidences 5 \
+    --max_evidences 15 \
     --num_qa 1 \
+    --difficulty "hard" \
     --output_dir "$QA_DIR" \
     --log_level "$LOG_LEVEL"

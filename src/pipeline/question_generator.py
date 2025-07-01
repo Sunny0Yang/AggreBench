@@ -5,24 +5,30 @@ import logging
 import random
 import time
 import os
-from typing import List, Dict
+from typing import List, Dict, Literal
 from utils.params import get_base_parser, qa_generation_args
 from utils.logger import setup_logging
 from utils.prompt_templates import QA_GENERATION_PROMPTS
 from client.llm_client import client
 from utils.struct import MultiModalTurn, Session, Conversation, ConversationDataset
 
+DifficultyLevel = Literal["easy", "medium", "hard"]
+
 class QuestionGenerator:
     def __init__(self, model: str,
-                 min_sessions=1, max_sessions=4,
-                 min_evidences=1, max_evidences=3,
-                 num_qa=3):
+                 min_sessions=5, max_sessions=10,
+                 session_threshold=2,
+                 min_evidences=10, max_evidences=15,
+                 num_qa=3,
+                 difficulty: DifficultyLevel = "easy"):
         self.model = model
         self.min_sessions = min_sessions
         self.max_sessions = max_sessions
+        self.session_threshold = session_threshold
         self.min_evidences = min_evidences
         self.max_evidences = max_evidences
         self.num_qa = num_qa
+        self.difficulty = difficulty
         self.logger = logging.getLogger(__name__)
     
     def batch_generate(self, dataset: ConversationDataset) -> List[Dict]:
@@ -48,6 +54,21 @@ class QuestionGenerator:
                 selected_sessions = random.sample(conversation.sessions, session_count)
                 selected_sessions.sort(key=lambda s: self._extract_session_number(s.id))
                 # 构建会话上下文
+                # TODO
+                # if self.difficulty == "hard":
+                #     # 可以在这里引入额外的“无关”会话，或者从整个对话中选择更多分散的会话
+                #     # 比如，除了 selected_sessions 外，再随机选择一些非重叠的 sessions 作为干扰
+                #     num_irrelevant_sessions = random.randint(1, 3) # 随机加入1-3个不相关的会话作为干扰
+                #     all_available_sessions = [s for s in conversation.sessions if s not in selected_sessions]
+                #     irrelevant_sessions = random.sample(all_available_sessions, min(num_irrelevant_sessions, len(all_available_sessions)))
+                    
+                #     # 将不相关会话随机插入到选定会话中，模拟噪音
+                #     combined_sessions = selected_sessions + irrelevant_sessions
+                #     random.shuffle(combined_sessions) # 打乱顺序，使相关信息更难提取
+                #     session_context = self._build_session_context(combined_sessions)
+                # else:
+                #     session_context = self._build_session_context(selected_sessions)
+
                 session_context = self._build_session_context(selected_sessions)
                 
                 # 生成问题
@@ -95,16 +116,22 @@ class QuestionGenerator:
 
     def generate_qa(self, session_context: str) -> str:
         """生成单个QA对"""
-        prompt = QA_GENERATION_PROMPTS["cross_session_template_en"].format(
+        prompt_template_key = f"{self.difficulty}_aggregation_template_en" # 根据难度选择模板
+        if prompt_template_key not in QA_GENERATION_PROMPTS:
+            self.logger.error(f"未找到难度等级 '{self.difficulty}' 对应的提示词模板。使用默认模板。")
+            prompt_template_key = "easy_aggregation_template_en" # 回退到默认模板
+        
+        prompt = QA_GENERATION_PROMPTS[prompt_template_key].format(
             session_context=session_context,
-            session_threshold=self.min_sessions,
+            session_threshold=self.session_threshold,
             min_evidences=self.min_evidences,
             max_evidences=self.max_evidences
         )
         messages = [
-            {"role": "system", "content": "You are a data analysis assistant specializing in generating queries that require aggregating information from multiple sessions."},
+            {"role": "system", "content": "You are a data analysis assistant specializing in generating aggregation queries of varying difficulty levels."},
             {"role": "user", "content": prompt},
         ]
+        self.logger.info(f"正在为难度 '{self.difficulty}' 生成QA...")
         completion = client.chat.completions.create(
             model=self.model,
             messages=messages,
@@ -117,7 +144,7 @@ class QuestionGenerator:
             if chunk.choices[0].delta.content:
                 response_content += chunk.choices[0].delta.content
 
-        print(f"API response: {response_content}")  # 调试用
+        print(f"API response: {response_content}")  # DEBUG
         return response_content
 
     def _parse_response(self, response: str) -> Dict:
@@ -126,9 +153,22 @@ class QuestionGenerator:
             import json
             import re
             temp = json.loads(response.strip())
-            match = re.search(r"^The answer is:\s*([0-9]+(?:\.[0-9]+)?)", temp["answer"])
-            if match:
-                temp["answer"] = float(match.group(1))
+            # 确保 'answer' 字段的解析能处理数字或字符串
+            if isinstance(temp.get("answer"), str):
+                match = re.search(r"^The answer is:\s*([0-9]+(?:\.[0-9]+)?)", temp["answer"])
+                if match:
+                    temp["answer"] = float(match.group(1))
+                else:
+                    temp["answer"] = temp["answer"].replace("The answer is: ", "").strip()
+            
+            # 确保 'evidence' 是列表，且每个元素都是字符串
+            if isinstance(temp.get("evidence"), list):
+                temp["evidence"] = [str(e).strip() for e in temp["evidence"]]
+            elif isinstance(temp.get("evidence"), str):
+                temp["evidence"] = [temp["evidence"].strip()] # 如果是字符串，尝试转为列表
+            else:
+                temp["evidence"] = ["未知证据"] # 兜底
+
             return temp
         except json.JSONDecodeError:
             # 尝试提取JSON部分
@@ -208,9 +248,11 @@ def main():
         model=args.model,
         min_sessions=args.min_sessions,
         max_sessions=args.max_sessions,
+        session_threshold=args.session_threshold,
         min_evidences=args.min_evidences,
         max_evidences=args.max_evidences,
-        num_qa=args.num_qa
+        num_qa=args.num_qa,
+        difficulty=args.difficulty
     )
     
     # 加载数据
@@ -224,7 +266,7 @@ def main():
     # 保存结果
     os.makedirs(args.output_dir, exist_ok=True)
     temp = (os.path.splitext(os.path.basename(args.input_data))[0]).split("_")[0]
-    filename = f"{temp}_qa.json"
+    filename = f"{temp}_{args.difficulty}_qa.json"
     output_path = os.path.join(args.output_dir, filename)
     save_results(results, output_path)
     

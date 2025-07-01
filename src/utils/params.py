@@ -26,16 +26,20 @@ def qa_generation_args(parser):
                         default=os.getenv('QA_DIR'),
                         help='Output directory for QA pairs')
 
-    parser.add_argument('--min_sessions', type=int, default=2,
+    parser.add_argument('--min_sessions', type=int, default=5,
+                        help='Min number of sessions per conversation; related to the length of the context')
+    parser.add_argument('--max_sessions', type=int, default=10,
+                        help='Max number of sessions per conversation; related to the length of the context')
+    parser.add_argument('--session_threshold', type=int, default=2,
                         help='Min number of sessions per QA')
-    parser.add_argument('--max_sessions', type=int, default=5,
-                        help='Max number of sessions per QA')
-    parser.add_argument('--min_evidences', type=int, default=5,
+    parser.add_argument('--min_evidences', type=int, default=10,
                         help='Min number of evidences per question')
-    parser.add_argument('--max_evidences', type=int, default=10,
+    parser.add_argument('--max_evidences', type=int, default=15,
                         help='Max number of evidences per question')
     parser.add_argument('--num_qa', type=int, default=10,
                         help='Number of QA pairs per conversation to generate')
+    parser.add_argument("--difficulty",type=str,choices=["easy", "medium", "hard"],
+                        default="easy",help="Difficulty level of the generated questions (easy, medium, hard).")
     return parser
 
 

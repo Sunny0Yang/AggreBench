@@ -1,7 +1,8 @@
 artifacts/processed/*
 artifacts/qa/*
 artifacts/raw/*
-
-logs/
+results
+scores
+logs/*
 *.log
-**/__pycache__/
+**/__pycache__
