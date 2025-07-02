@@ -10,8 +10,9 @@ from utils.struct import MultiModalTurn, Session, Conversation, ConversationData
 logger = logging.getLogger(__name__)
 
 class BizFinLoader:
-    def __init__(self):
+    def __init__(self, combine_size = 10):
         self.logger = logger
+        self.combine_size = combine_size
 
     def _extract_tables(self, text_content: str) -> List[Dict]:
         """从文本内容中提取表格数据"""
@@ -42,10 +43,28 @@ class BizFinLoader:
         
         return tables
 
-    def _process_sample(self, sample: Dict, conversation_id: str) -> Conversation:
-        """处理单个样本数据"""
-        messages = sample.get("messages", [])
+    def _create_combined_conversation(self, samples: List[Dict], conversation_id: str) -> Conversation:
+        """创建组合对话对象"""
         sessions = []
+        session_counter = 1  # 会话计数器
+        
+        # 处理每个样本
+        for sample_idx, sample in enumerate(samples):
+            # 提取样本中的会话
+            sample_sessions = self._extract_sessions(sample, conversation_id, session_counter)
+            sessions.extend(sample_sessions)
+            session_counter += len(sample_sessions)
+        
+        return Conversation(
+            conversation_id=conversation_id,
+            speakers=["Assistant"],
+            sessions=sessions,
+        )
+
+    def _extract_sessions(self, sample: Dict, conversation_id: str, start_index: int) -> List[Session]:
+        """从样本中提取会话并重新编号"""
+        sessions = []
+        messages = sample.get("messages", [])
         
         # 提取所有表格数据
         all_tables = []
@@ -58,7 +77,8 @@ class BizFinLoader:
         
         # 为每个表格创建一个会话
         for table_idx, table in enumerate(all_tables):
-            session_id = f"{conversation_id}_table_{table_idx+1}"
+            # 使用新的会话ID格式: conversation_id + session_ + 序号
+            session_id = f"{conversation_id}_session_{start_index + table_idx}"
             
             # 创建回合 - 每行数据作为一个回合
             turns = []
@@ -66,49 +86,21 @@ class BizFinLoader:
                 # 将行数据格式化为字符串
                 row_content = ", ".join([f"{k}: {v}" for k, v in row.items()])
                 turns.append(MultiModalTurn(
-                    turn_id=f"{session_id}_row_{row_idx+1}",
-                    speaker="System",
+                    turn_id=f"{session_id}_turn_{row_idx+1}",
+                    speaker="Assistant",
                     content=f"Row {row_idx+1}: {row_content}"
                 ))
             
             # 创建会话对象
             sessions.append(Session(
                 session_id=session_id,
-                time="N/A",  # 结构化数据没有时间信息
-                participants=["System"],
-                turns=turns
+                time="N/A",
+                participants=["Assistant"],
+                turns=turns,
+                type="table",
             ))
         
-        # 提取问题
-        questions = []
-        for msg in messages:
-            if msg.get("role") == "user":
-                for content in msg.get("content", []):
-                    if content.get("type") == "text":
-                        # 提取问题
-                        q_match = re.search(r'### 用户问题\nquestion: (.+?)\n', content["text"])
-                        if q_match:
-                            questions.append({
-                                "question": q_match.group(1).strip(),
-                                "answer": self._extract_answer(sample.get("choices", [])),
-                                "evidence": [],
-                                "qa_index": len(questions)
-                            })
-        
-        return Conversation(
-            conversation_id=conversation_id,
-            speakers=["System", "User"],
-            sessions=sessions
-        )
-
-    def _extract_answer(self, choices: List) -> str:
-        """从choices中提取答案"""
-        if choices:
-            choice = choices[0]
-            for content in choice.get("message", {}).get("content", []):
-                if content.get("type") == "text":
-                    return content["text"]
-        return ""
+        return sessions
 
     def load(self, file_path: str) -> ConversationDataset:
         """加载BizFinBench数据集文件并转换为ConversationDataset"""
@@ -126,9 +118,14 @@ class BizFinLoader:
             
             # 处理每个样本
             conversations = []
-            for idx, sample in enumerate(data_lines):
-                conversation_id = f"conv_{idx+1}"
-                conversation = self._process_sample(sample, conversation_id)
+            for group_idx in range(0, len(data_lines), self.combine_size):
+                group_samples = data_lines[group_idx:group_idx+self.combine_size]
+                if not group_samples:
+                    continue
+                    
+                # 创建组合对话
+                conversation_id = f"conv_{group_idx//self.combine_size+1}"
+                conversation = self._create_combined_conversation(group_samples, conversation_id)
                 conversations.append(conversation)
             
             # 创建数据集对象
@@ -161,7 +158,8 @@ class BizFinLoader:
                         "turn_id": turn.id,
                         "speaker": turn.speaker,
                         "content": turn.content
-                    } for turn in session.turns]
+                    } for turn in session.turns],
+                    "type": session.type,
                 }
                 conv_data["sessions"].append(session_data)
             serialized.append(conv_data)

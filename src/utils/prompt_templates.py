@@ -168,12 +168,12 @@ Generation Requirements (Easy Level):
 {{
     "question": "Question text",
     "answer": "The answer is: [numeric value or concise response]", # MUST start with "The answer is:"
-    "evidence": ["Row <row_identifier>: <Column_Name>: <value>"] # Exactly 1 evidence entry. Use the most relevant row ID.
+    "evidence": ["Session <session_id>: Row <row_identifier>: <Column_Name>: <value>"] # Exactly 1 evidence entry. Use the most relevant row ID.
 }}
 5.  **Evidence Requirements**:
     - **CRITICAL: Evidence MUST be direct and highly relevant to the question's claim.**
     - **ONLY include the single, most direct evidence entry that is absolutely necessary to derive the answer.**
-    - References MUST use "Row <row_identifier>: <Column_Name>: <value>" format.
+    - References MUST use "Session <session_id>: Row <row_identifier>: <Column_Name>: <value>" format.
     - The evidence provided must directly contain the value or data points used in the aggregation.
     - Must contain exactly 1 distinct evidence entry.
 6.  **Answer Formatting**:
@@ -207,13 +207,13 @@ Generation Requirements (Medium Level):
 {{
     "question": "Question text",
     "answer": "The answer is: [numeric value or concise response]",
-    "evidence": ["Row <row_identifier>: <Column_Name>: <value>", ...] # 2-3 evidence entries.
+    "evidence": ["Session <session_id>: Row <row_identifier>: <Column_Name>: <value>", ...] # 2-3 evidence entries.
 }}
 5.  **Evidence Requirements**:
     - **CRITICAL: Evidence MUST be direct and highly relevant to the question's claim.**
     - **ONLY include evidence that is absolutely necessary to derive the answer.**
     - If there aren't enough direct evidences to meet 'min_evidences' (2), *do not generate the question*.
-    - References MUST use "Row <row_identifier>: <Column_Name>: <value>" format.
+    - References MUST use "Session <session_id>: Row <row_identifier>: <Column_Name>: <value>" format.
     - Quotes MUST be verbatim and directly support the answer's calculation or claim.
     - Each evidence entry MUST contribute directly to the calculation or understanding required to answer.
     - Must contain 2-3 distinct evidence entries.
@@ -256,13 +256,13 @@ Generation Requirements (Hard Level):
 {{
     "question": "Question text",
     "answer": "The answer is: [numeric value or concise response]",
-    "evidence": ["Row <row_identifier>: <Column_Name>: <value>", ...] # 4-5 evidence entries.
+    "evidence": ["Session <session_id>: Row <row_identifier>: <Column_Name>: <value>", ...] # 4-5 evidence entries.
 }}
 6.  **Evidence Requirements**:
     - **CRITICAL: Evidence MUST be direct and highly relevant to the question's claim.**
     - **ONLY include evidence that is absolutely necessary to derive the answer.**
     - If there aren't enough direct evidences to meet 'min_evidences' (4), *do not generate the question*.
-    - References MUST use "Row <row_identifier>: <Column_Name>: <value>" format.
+    - References MUST use "Session <session_id>: Row <row_identifier>: <Column_Name>: <value>" format.
     - Quotes MUST be verbatim and directly support the answer's calculation or claim.
     - Each evidence entry MUST contribute directly to the complex calculation or understanding required to answer.
     - Must contain 4-5 distinct evidence entries.

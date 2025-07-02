@@ -36,11 +36,12 @@ class MultiModalTurn:
 
 # 会话表示
 class Session:
-    def __init__(self, session_id, time, participants, turns):
+    def __init__(self, session_id, time, participants, turns, type="conversation"):
         self.id = session_id
         self.time = time
         self.participants = participants
         self.turns = turns  # DialogueTurn列表
+        self.type = type  # 会话类型
 
 # 新增：对话表示（包含多个会话）
 class Conversation:

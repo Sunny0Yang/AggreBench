@@ -108,8 +108,9 @@ class QuestionGenerator:
             context += f"### Session ID: {session.id}\n"
             
             # 检测是否是表格数据
-            is_table_data = "table" in session.id.lower() or any("row" in turn.id for turn in session.turns)
-            
+            # print(f"Session Type: {session.type}")
+            is_table_data = (session.type == "table")
+            # print(f"Is table data: {is_table_data}")  # DEBUG
             if is_table_data:
                 # 表格数据处理
                 context += "Data Type: Structured Table\n"
@@ -128,7 +129,7 @@ class QuestionGenerator:
             
             context += "\n"
 
-        print(context)  # DEBUG
+        # print(context)  # DEBUG
         # exit(0)
         return context
 
@@ -246,7 +247,8 @@ def load_data(input_path: str) -> ConversationDataset:
                     session_id=session_data.get("session_id", f"session_{len(sessions)+1}"),
                     time=session_data.get("time", "Unknown"),
                     participants=session_data.get("participants", ["Participant A", "Participant B"]),
-                    turns=turns
+                    turns=turns,
+                    type=session_data.get("type", "conversation")
                 )
                 sessions.append(session)
             
