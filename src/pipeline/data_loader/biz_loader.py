@@ -5,7 +5,7 @@ import os
 import re
 import logging
 from typing import List, Dict
-from utils.struct import MultiModalTurn, Session, Conversation, ConversationDataset
+from utils.struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +51,9 @@ class BizFinLoader:
         # 处理每个样本
         for sample_idx, sample in enumerate(samples):
             # 提取样本中的会话
-            sample_sessions = self._extract_sessions(sample, conversation_id, session_counter)
-            sessions.extend(sample_sessions)
-            session_counter += len(sample_sessions)
+            sample_session = self._extract_session(sample, conversation_id, session_counter)
+            sessions.append(sample_session)
+            session_counter += 1
         
         return Conversation(
             conversation_id=conversation_id,
@@ -61,7 +61,7 @@ class BizFinLoader:
             sessions=sessions,
         )
 
-    def _extract_sessions(self, sample: Dict, conversation_id: str, start_index: int) -> List[Session]:
+    def _extract_session(self, sample: Dict, conversation_id: str, start_index: int) -> Session:
         """从样本中提取会话并重新编号"""
         sessions = []
         messages = sample.get("messages", [])
@@ -74,33 +74,46 @@ class BizFinLoader:
                     if content.get("type") == "text":
                         tables = self._extract_tables(content["text"])
                         all_tables.extend(tables)
+        if not all_tables:
+            return []
+
+        session_id = f"{conversation_id}_session_{start_index}"
+
+        # 创建Table对象列表
+        table_objects = []
+        for table_data in all_tables:
+            table = Table(
+                headers=table_data["headers"],
+                rows=table_data["rows"]
+            )
+            table_objects.append(table)
         
-        # 为每个表格创建一个会话
-        for table_idx, table in enumerate(all_tables):
-            # 使用新的会话ID格式: conversation_id + session_ + 序号
-            session_id = f"{conversation_id}_session_{start_index + table_idx}"
+        # 为每个表格创建一个session
+        turns = []
+        # for table_idx, table in enumerate(all_tables):
+        #     # 使用新的会话ID格式: conversation_id + session_ + 序号
+        #     session_id = f"{conversation_id}_session_{start_index + table_idx}"
             
-            # 创建回合 - 每行数据作为一个回合
-            turns = []
-            for row_idx, row in enumerate(table["rows"]):
-                # 将行数据格式化为字符串
-                row_content = ", ".join([f"{k}: {v}" for k, v in row.items()])
-                turns.append(MultiModalTurn(
-                    turn_id=f"{session_id}_turn_{row_idx+1}",
-                    speaker="Assistant",
-                    content=f"Row {row_idx+1}: {row_content}"
-                ))
+        #     # 创建回合 - 每行数据作为一个回合
+        #     turns = []
+        #     for row_idx, row in enumerate(table["rows"]):
+        #         # 将行数据格式化为字符串
+        #         row_content = ", ".join([f"{k}: {v}" for k, v in row.items()])
+        #         turns.append(MultiModalTurn(
+        #             turn_id=f"{session_id}_turn_{row_idx+1}",
+        #             speaker="Assistant",
+        #             content=f"Row {row_idx+1}: {row_content}"
+        #         ))
             
-            # 创建会话对象
-            sessions.append(Session(
-                session_id=session_id,
-                time="N/A",
-                participants=["Assistant"],
-                turns=turns,
-                type="table",
-            ))
+        session = Session(
+            session_id=session_id,
+            time="N/A",
+            participants=["Assistant"],
+            turns=turns,
+            tables=table_objects
+        )
         
-        return sessions
+        return session
 
     def load(self, file_path: str) -> ConversationDataset:
         """加载BizFinBench数据集文件并转换为ConversationDataset"""
@@ -159,7 +172,10 @@ class BizFinLoader:
                         "speaker": turn.speaker,
                         "content": turn.content
                     } for turn in session.turns],
-                    "type": session.type,
+                    "tables": [{
+                        "headers": table.headers,
+                        "rows": table.rows
+                    } for table in session.tables],
                 }
                 conv_data["sessions"].append(session_data)
             serialized.append(conv_data)

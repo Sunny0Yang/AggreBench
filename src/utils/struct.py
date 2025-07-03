@@ -1,5 +1,6 @@
 # src/utils/struct.py
 
+from typing import List, Dict
 # 单个对话回合表示
 class DialogueTurn:
     def __init__(self, turn_id, speaker, content):
@@ -34,14 +35,23 @@ class MultiModalTurn:
     def __repr__(self):
         return f"<MultiModalTurn {self.id}: {self.speaker} - {self.text_content[:30]}...>"
 
+class Table:
+    """表格数据结构"""
+    def __init__(self, headers: List[str], rows: List[Dict[str, str]]):
+        self.headers = headers  # 表头列表
+        self.rows = rows        # 行数据列表（每行是一个字典）
+    
+    def __str__(self):
+        return f"Table(headers={self.headers}, rows={len(self.rows)})"
+        
 # 会话表示
 class Session:
-    def __init__(self, session_id, time, participants, turns, type="conversation"):
+    def __init__(self, session_id, time, participants, turns, type="conversation", tables: List[Table] = None):
         self.id = session_id
         self.time = time
         self.participants = participants
         self.turns = turns  # DialogueTurn列表
-        self.type = type  # 会话类型
+        self.tables = tables or []
 
 # 新增：对话表示（包含多个会话）
 class Conversation:
