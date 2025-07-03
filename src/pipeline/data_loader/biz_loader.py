@@ -6,13 +6,19 @@ import re
 import logging
 from typing import List, Dict
 from utils.struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset
-
+from utils.session_simulator import SessionSimulator
+from utils.prompt_templates import PERSONA
 logger = logging.getLogger(__name__)
 
 class BizFinLoader:
-    def __init__(self, combine_size = 10):
+    def __init__(self, model:str, max_turns:int, is_step:bool, cache_dir: str,
+        combine_size = 10, generate_pseudo_dialogue=True
+        ):
         self.logger = logger
         self.combine_size = combine_size
+        self.session_simulator = SessionSimulator(model=model, max_turns=max_turns, is_step=is_step, cache_dir=cache_dir)
+        self.generate_pseudo_dialogue = generate_pseudo_dialogue
+        self.persona = PERSONA["financial"]
 
     def _extract_tables(self, text_content: str) -> List[Dict]:
         """从文本内容中提取表格数据"""
@@ -61,6 +67,15 @@ class BizFinLoader:
             sessions=sessions,
         )
 
+    def _table_to_evidence_str(self, idx:int, table: Table) -> str:
+        """将表格转换为证据字符串"""
+        evidence = f"Table {idx + 1}\n"
+        for i, row in enumerate(table.rows):
+            row_str = ", ".join([f"{k}: {v}" for k, v in row.items()])
+            evidence += f"Row {i}:\n{row_str}\n"
+        
+        return evidence.strip()
+
     def _extract_session(self, sample: Dict, conversation_id: str, start_index: int) -> Session:
         """从样本中提取会话并重新编号"""
         sessions = []
@@ -90,25 +105,36 @@ class BizFinLoader:
         
         # 为每个表格创建一个session
         turns = []
-        # for table_idx, table in enumerate(all_tables):
-        #     # 使用新的会话ID格式: conversation_id + session_ + 序号
-        #     session_id = f"{conversation_id}_session_{start_index + table_idx}"
-            
-        #     # 创建回合 - 每行数据作为一个回合
-        #     turns = []
-        #     for row_idx, row in enumerate(table["rows"]):
-        #         # 将行数据格式化为字符串
-        #         row_content = ", ".join([f"{k}: {v}" for k, v in row.items()])
-        #         turns.append(MultiModalTurn(
-        #             turn_id=f"{session_id}_turn_{row_idx+1}",
-        #             speaker="Assistant",
-        #             content=f"Row {row_idx+1}: {row_content}"
-        #         ))
+        if self.generate_pseudo_dialogue:
+            conv_id = conversation_id.split('_')[-1]
+            if not( int(conv_id) > 2 and int(start_index) > 3): # DEBUG
+                # 生成表格evidence
+                evidences = [self._table_to_evidence_str(idx, table) for idx,table in enumerate(table_objects)]
+                # 生成对话回合
+                dialog = self.session_simulator.generate_dialog(
+                    evidences=evidences,
+                    persona=self.persona
+                )
+                
+                # 转换为MultiModalTurn对象
+                for turn_idx, turn in enumerate(dialog):
+                    turns.append(MultiModalTurn(
+                        turn_id=f"{session_id}_turn_{turn_idx+1}",
+                        speaker=turn["speaker"],
+                        content=turn["content"]
+                    ))
+        else:
+            # 如果不需要伪对话，添加简单的表头信息
+            turns.append(MultiModalTurn(
+                turn_id=f"{session_id}_title",
+                speaker="Assistant",
+                content=f"Session contains {len(all_tables)} tables"
+            ))
             
         session = Session(
             session_id=session_id,
             time="N/A",
-            participants=["Assistant"],
+            participants = ["User", "Assistant"] if self.generate_pseudo_dialogue else ["Assistant"],
             turns=turns,
             tables=table_objects
         )
@@ -184,7 +210,10 @@ class BizFinLoader:
             json.dump(serialized, f, indent=2, ensure_ascii=False)
 
 def main():
-    loader = BizFinLoader()
+    loader = BizFinLoader(model=args.model, 
+                        max_turns=args.max_turns, is_step= args.is_step,
+                        cache_dir=args.cache_dir, combine_size=args.combine_size,
+                        generate_pseudo_dialogue=args.generate_pseudo_dialogue)
     dataset = loader.load(args.input_data)
     
     # 保存处理后的数据集

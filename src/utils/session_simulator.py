@@ -1,0 +1,214 @@
+# utils/session_simulator.py
+
+from typing import Dict, List, Optional
+from pathlib import Path
+import os
+import json
+import time
+import hashlib
+from utils.prompt_templates import SESSION_SIMULATOR_PROMPT
+from client.llm_client import client
+
+class SessionSimulator:
+    def __init__(self,
+                 model: str,
+                 max_turns: int = 6,
+                 is_step: bool = True,
+                 cache_dir: str = "./dialog_cache"):
+        """
+        会话模拟器初始化
+
+        :param model: LLM 模型名称
+        :param max_turns: 最大对话轮次
+        :param is_step: 是否启用暂停机制，True 为启用，每次轮次结束后暂停
+        :param cache_dir: 对话缓存目录
+        """
+        self.model = model
+        self.max_turns = max_turns
+        self.cache_dir = Path(cache_dir)
+        self.is_step = is_step
+        os.makedirs(self.cache_dir, exist_ok=True)
+
+        self.current_state: Dict = {}
+
+        self.current_dialog: List[Dict] = []
+
+    def generate_dialog(self,
+                        evidences: List[str],
+                        persona: str) -> List[Dict]:
+        """
+        生成伪对话
+
+        :param evidences: 证据字符串列表，用户 LLM 需要在会话中透露出来的信息
+        :param persona: 用户人格描述
+        :return: 对话回合列表
+        """
+        # 创建一个哈希值作为该会话的唯一标识，用于缓存
+        # 包含 evidences 和 persona，确保相同参数的会话能加载同一缓存
+        session_hash = hashlib.md5(
+            f"{json.dumps(evidences, sort_keys=True)}_{persona}".encode()
+        ).hexdigest()
+
+        # 尝试从缓存加载会话状态和对话历史
+        if self._load_session_state(session_hash):
+            print(f"从缓存恢复会话: {session_hash}")
+            print(f"当前轮次: {self.current_state['turn_count']}/{self.max_turns}")
+            # 注意：这里我们只加载了状态，对话历史会在需要时加载或继续累加
+        else:
+            print(f"创建新会话: {session_hash}")
+            # 初始化对话状态
+            self.current_state = {
+                "session_hash": session_hash,
+                "evidences": evidences,
+                "persona": persona,
+                "turn_count": 0,
+                "paused": False
+            }
+            self.current_dialog = []
+            # 初始化对话
+            self.current_dialog.append({
+                "id": 1,
+                "speaker": "Assistant",
+                "content": "Hi! How can I assist you today?",
+            })
+            self._save_session_state() # 保存初始状态和对话历史
+
+        # 从加载的状态中获取当前轮次
+        current_turn = self.current_state["turn_count"]
+        all_evidences_str = "\n".join([f"- {e}" for e in self.current_state["evidences"]])
+        print(f"all_evidences:{all_evidences_str}")
+        # 进行对话轮次
+        while current_turn < self.max_turns:
+            # 如果启用了暂停机制，且当前不是会话开始的第一步
+            if self.is_step and current_turn > 0:
+                print(f"\n--- 对话暂停，当前轮次: {current_turn}/{self.max_turns} ---")
+                print("您可以修改缓存文件中的对话历史，然后按回车键继续...")
+                input("（按回车键继续）")
+                # 用户确认后，重新加载最新的会话状态和对话历史（可能已被手动修改）
+                if not self._load_session_state(session_hash):
+                    print("错误：无法加载暂停后的会话状态。")
+                    break # 无法加载则退出循环
+                print("继续对话...")
+
+            # 将当前对话历史转换为适合 LLM prompt 的字符串格式
+            # 使用列表存储 Dict 结构的好处是方便序列化（json）和反序列化
+            # 在转换为 prompt 时再进行格式化
+            chat_history_str = self._format_chat_history(self.current_dialog)
+                
+            user_prompt = SESSION_SIMULATOR_PROMPT["user"].format(
+                evidences=all_evidences_str,
+                persona=self.current_state["persona"],
+                chat_history=chat_history_str
+            )
+            print(f"\n--- User LLM (Turn {current_turn + 1}) ---")
+            user_response = self._llm_generate([{"role": "user", "content": user_prompt}])
+            self.current_dialog.append({
+                "id": len(self.current_dialog) + 1,
+                "speaker": "User",
+                "content": user_response,
+            })
+            # 生成助手响应
+            # 助手 LLM 的 prompt 只需要当前对话历史和用户最新输入
+            assistant_prompt = SESSION_SIMULATOR_PROMPT["assistant"].format(
+                evidences=all_evidences_str,
+                chat_history=self._format_chat_history(self.current_dialog), # 传入更新后的历史
+                user_input=user_response
+            )
+            print(f"\n--- Assistant LLM (Turn {current_turn + 1}) ---")
+            assistant_response = self._llm_generate([{"role": "user", "content": assistant_prompt}])
+            self.current_dialog.append({
+                "id": len(self.current_dialog) + 1,
+                "speaker": "Assistant",
+                "content": assistant_response,
+            })
+
+            # 更新状态
+            self.current_state["turn_count"] += 1
+            current_turn = self.current_state["turn_count"] # 更新当前轮次
+
+            # 保存当前会话状态和对话历史到缓存
+            self._save_session_state()
+
+        print(f"\n--- 对话结束，共进行 {self.current_state['turn_count']} 轮次 ---")
+        return self.current_dialog
+
+    def _llm_generate(self, messages: List[Dict]) -> str:
+        """
+        调用 LLM 客户端生成响应
+
+        :param messages: LLM 输入消息列表
+        :return: LLM 生成的文本响应
+        """
+        try:
+            completion = client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                stream=True,
+                extra_body={"enable_thinking": True}
+            )
+            response_content = ""
+            for chunk in completion:
+                if chunk.choices[0].delta.content:
+                    response_content += chunk.choices[0].delta.content
+            print(f"API response: {response_content}")
+            return response_content
+        except Exception as e:
+            print(f"LLM 调用失败: {e}")
+            return "对不起，我暂时无法回应。" # 返回一个默认错误信息
+
+    def _get_session_cache_file(self, session_hash: str) -> Path:
+        """获取特定会话的缓存文件路径"""
+        return self.cache_dir / f"{session_hash}.json"
+
+    def _load_session_state(self, session_hash: str) -> bool:
+        """
+        从缓存加载会话状态和对话历史。
+        如果成功加载，则更新 self.current_state 和 self.current_dialog。
+        """
+        cache_file = self._get_session_cache_file(session_hash)
+        if cache_file.exists():
+            try:
+                with open(cache_file, 'r', encoding='utf-8') as f:
+                    cached_data = json.load(f)
+                self.current_state = cached_data.get("state", {})
+                self.current_dialog = cached_data.get("dialog", [])
+                if "evidences" not in self.current_state:
+                    self.current_state["evidences"] = []
+                return True
+            except json.JSONDecodeError as e:
+                print(f"缓存文件 {cache_file} 解析失败: {e}")
+                return False
+        return False
+
+    def _save_session_state(self):
+        """
+        将会话状态和对话历史保存到缓存。
+        """
+        if not self.current_state:
+            print("警告：没有当前会话状态可保存。")
+            return
+
+        session_hash = self.current_state.get("session_hash")
+        if not session_hash:
+            print("错误：无法获取会话哈希值，无法保存缓存。")
+            return
+
+        cache_file = self._get_session_cache_file(session_hash)
+        try:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "state": self.current_state,
+                    "dialog": self.current_dialog
+                }, f, ensure_ascii=False, indent=2)
+            # print(f"会话状态和对话历史已保存到: {cache_file}")
+        except IOError as e:
+            print(f"保存缓存文件 {cache_file} 失败: {e}")
+
+    def _format_chat_history(self, chat_history: List[Dict]) -> str:
+        """
+        将列表结构存储的对话历史格式化为 LLM prompt 所需的字符串。
+        """
+        formatted_history = []
+        for entry in chat_history:
+            formatted_history.append(f"{entry['speaker']}: {entry['content']}")
+        return "\n".join(formatted_history)
