@@ -89,7 +89,7 @@ class SessionSimulator:
             # 如果启用了暂停机制，且当前不是会话开始的第一步
             if self.is_step and current_turn > 0:
                 logger.info(f"\n--- 对话暂停，当前轮次: {current_turn}/{self.max_turns} ---")
-                logger.info("您可以修改缓存文件中的对话历史，然后按回车键继续...")
+                logger.info(f"您可以修改缓存文件{self._get_session_cache_file(session_hash)}中的对话历史，然后按回车键继续...")
                 input("（按回车键继续）")
                 if not self._load_session_state(session_hash):
                     logger.error("错误：无法加载暂停后的会话状态。")
@@ -123,14 +123,7 @@ class SessionSimulator:
             })
 
             # 更新 remaining_evidences
-            new_remaining_evidences_user = []
-            for evidence in self.current_state["remaining_evidences"]:
-                if evidence not in mentioned_by_user:
-                    new_remaining_evidences_user.append(evidence)
-                    logger.debug(f"user LLM 未提及信息: {evidence}")
-                else:
-                    logger.info(f"user LLM 已标记提及信息: {evidence}")
-            self.current_state["remaining_evidences"] = new_remaining_evidences_user
+            self.update_remaining_evidences(mentioned_by_user, 'user')
 
             # 生成助手响应
             # 助手 LLM 的 prompt 只需要当前对话历史和用户最新输入
@@ -150,15 +143,7 @@ class SessionSimulator:
             })
 
             # 更新 remaining_evidences
-            final_remaining_evidences_this_turn = []
-            for evidence in self.current_state["remaining_evidences"]:
-                if evidence not in mentioned_by_assistant:
-                    final_remaining_evidences_this_turn.append(evidence)
-                    logger.debug(f"assistant LLM 未提及信息: {evidence}")
-                else:
-                    logger.info(f"assistant LLM 已标记提及信息: {evidence}")
-            self.current_state["remaining_evidences"] = final_remaining_evidences_this_turn
-
+            self.update_remaining_evidences(mentioned_by_assistant,'assistant')
             # 更新状态
             self.current_state["turn_count"] += 1
             current_turn = self.current_state["turn_count"] # 更新当前轮次
@@ -271,3 +256,28 @@ class SessionSimulator:
         for entry in chat_history:
             formatted_history.append(f"{entry['speaker']}: {entry['content']}")
         return "\n".join(formatted_history)
+
+    def _filter_remaining_evidences(self, remaining_evidences: List[str], mentioned_evidences: List[str], role: str) -> List[str]:
+        filtered_evidences = []
+        for evidence in remaining_evidences:
+            matched = False
+            for mentioned in mentioned_evidences:
+                # 优化匹配逻辑：忽略大小写，去除空白，部分匹配
+                norm_evidence = re.sub(r"\s+", "", evidence).lower()
+                norm_mentioned = re.sub(r"\s+", "", mentioned).lower()
+                if norm_evidence in norm_mentioned or norm_mentioned in norm_evidence:
+                    matched = True
+                    break
+            if not matched:
+                filtered_evidences.append(evidence)
+                logger.debug(f"{role} LLM 未标记提及信息: {evidence}")
+            else:
+                logger.info(f"{role} LLM 已标记提及信息: {evidence}")
+        return filtered_evidences
+
+    def update_remaining_evidences(self, mentioned: List[str], role:str):
+        self.current_state["remaining_evidences"] = self._filter_remaining_evidences(
+            self.current_state.get("remaining_evidences", []),
+            mentioned,
+            role=role
+        )
