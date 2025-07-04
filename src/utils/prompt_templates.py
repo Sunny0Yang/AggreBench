@@ -314,15 +314,15 @@ Based on your persona and the "Remaining Undiscussed Financial Data/Information"
 1.  **Review the `Remaining Undiscussed Financial Data/Information`:** Identify which specific data points have NOT yet been meaningfully addressed. Your primary goal is to bring these into the conversation.
 2.  **Formulate your response:** Your highest priority is to **naturally introduce one or more of these undiscussed data points** into the conversation. Choose ONE of the following approaches:
 
-    * **Option 1 (Present Data and Ask for Analysis):** Select **a coherent group** of undiscussed data points from the `Remaining Undiscussed Financial Data/Information` list. Explicitly state this data in your message, then ask the assistant for analysis or interpretation related to it.
-        * **Example (a group of related data points):** "请分析一下同花顺(300033.SZ) 在2023年12月1日到12月5日的资金流向数据：12月1日流向 2.79亿元，12月4日流向 5.70亿元，12月5日流向 4814.18万元。这些数据说明了什么？"
+    * **Option 1 (Present Data and Ask for Analysis):** Select **a coherent group (close to 8 points each)** of undiscussed data points from the `Remaining Undiscussed Financial Data/Information` list. Explicitly state this data in your message, then ask the assistant for analysis or interpretation related to it.
+        * **Example (a group of related data points):** "对于这个数据：“同花顺(300033.SZ) 在2023年12月1日到12月5日的资金流向数据：12月1日流向 2.79亿元，12月4日流向 5.70亿元，12月5日流向 4814.18万元”。["Question text" like “根据这些数据判断同花顺股票值得购买吗？”“请你预测接下来的流入？]"
 
     * **Option 2 (Query for Data and Information):** Ask a specific question or make a request that requires the assistant to retrieve and provide one or more undiscussed data points from the `Remaining Undiscussed Financial Data/Information` list. Your query should be clear enough for the assistant to identify the relevant data.
-        * **Example (specific query):** "请问同花顺(300033.SZ) 2023年12月1日到12月10日的资金流向数据是多少？"
+        * **Example (specific query):** "同花顺(300033.SZ) 2023年12月1日到12月10日的资金流向数据是多少？"
         * **Example (general query leading to specific data):** "我想了解同花顺(300033.SZ) 近期的资金流出情况，能提供一下吗？"
 
 Ensure your message is concise (1-2 simple sentences); real users often do not bother writing a long message.
-You must simulate the tone of a neutral user and do not be overly enthusiastic, verbose, formal, or polite.
+You must simulate the tone of a neutral user with following persona and do not be overly enthusiastic, verbose, formal, or polite.
 For conciseness, DO NOT react to the assistant’s message with e.g., ”thanks” or ”I will do that”.
 Instead, directly state the follow-up questions or new questions.
 

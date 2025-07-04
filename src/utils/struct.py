@@ -51,7 +51,7 @@ class Session:
         self.time = time
         self.participants = participants
         self.turns = turns  # DialogueTurn列表
-        self.tables = tables or []
+        self.tables = tables
 
 # 新增：对话表示（包含多个会话）
 class Conversation:

@@ -3,11 +3,20 @@ import os
 import json
 import re
 import hashlib
+import logging
 from typing import Dict, List, Tuple
 from pathlib import Path
 from utils.prompt_templates import SESSION_SIMULATOR_PROMPT
 from client.llm_client import client
 
+# 配置logger，日志保存到dialog_simulator.log文件
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filename='dialog_simulator.log',
+    filemode='a'
+)
+logger = logging.getLogger(__name__)
 
 class SessionSimulator:
     def __init__(self,
@@ -51,11 +60,10 @@ class SessionSimulator:
 
         # 尝试从缓存加载会话状态和对话历史
         if self._load_session_state(session_hash):
-            print(f"从缓存恢复会话: {session_hash}")
-            print(f"当前轮次: {self.current_state['turn_count']}/{self.max_turns}")
-            # 注意：这里我们只加载了状态，对话历史会在需要时加载或继续累加
+            logger.info(f"从缓存恢复会话: {session_hash}")
+            logger.info(f"当前轮次: {self.current_state['turn_count']}/{self.max_turns}")
         else:
-            print(f"创建新会话: {session_hash}")
+            logger.info(f"创建新会话: {session_hash}")
             # 初始化对话状态
             self.current_state = {
                 "session_hash": session_hash,
@@ -80,15 +88,16 @@ class SessionSimulator:
         while current_turn < self.max_turns:
             # 如果启用了暂停机制，且当前不是会话开始的第一步
             if self.is_step and current_turn > 0:
-                print(f"\n--- 对话暂停，当前轮次: {current_turn}/{self.max_turns} ---")
-                print("您可以修改缓存文件中的对话历史，然后按回车键继续...")
+                logger.info(f"\n--- 对话暂停，当前轮次: {current_turn}/{self.max_turns} ---")
+                logger.info("您可以修改缓存文件中的对话历史，然后按回车键继续...")
                 input("（按回车键继续）")
-                # 用户确认后，重新加载最新的会话状态和对话历史（可能已被手动修改）
                 if not self._load_session_state(session_hash):
-                    print("错误：无法加载暂停后的会话状态。")
-                    break # 无法加载则退出循环
-                print("继续对话...")
-
+                    logger.error("错误：无法加载暂停后的会话状态。")
+                    break
+                logger.info("继续对话...")
+            if self.current_state["remaining_evidences"] == []:
+                logger.info("所有信息都已被提及，对话结束。")
+                break
             # 将当前对话历史转换为适合 LLM prompt 的字符串格式
             # 使用列表存储 Dict 结构的好处是方便序列化（json）和反序列化
             # 在转换为 prompt 时再进行格式化
@@ -101,9 +110,9 @@ class SessionSimulator:
             )
             if current_turn == self.max_turns - 1 and self.current_state["remaining_evidences"]:
                 user_prompt += "\nCRITICAL: Final turn - MUST cover ALL remaining evidence in one response"
-            print(f"user_prompt: {user_prompt}")
+            logger.debug(f"user_prompt: {user_prompt}")
 
-            print(f"\n--- User LLM (Turn {current_turn + 1}) ---")
+            logger.info(f"\n--- User LLM (Turn {current_turn + 1}) ---")
             user_response_raw = self._llm_generate([{"role": "user", "content": user_prompt}])
             user_response_content, mentioned_by_user = self._extract_and_clean_llm_response(user_response_raw)
             
@@ -118,8 +127,9 @@ class SessionSimulator:
             for evidence in self.current_state["remaining_evidences"]:
                 if evidence not in mentioned_by_user:
                     new_remaining_evidences_user.append(evidence)
+                    logger.debug(f"user LLM 未提及信息: {evidence}")
                 else:
-                    print(f"user LLM 已标记提及信息: {evidence}")
+                    logger.info(f"user LLM 已标记提及信息: {evidence}")
             self.current_state["remaining_evidences"] = new_remaining_evidences_user
 
             # 生成助手响应
@@ -129,7 +139,7 @@ class SessionSimulator:
                 chat_history=self._format_chat_history(self.current_dialog), # 传入更新后的历史
                 user_input=user_response_content
             )
-            print(f"\n--- Assistant LLM (Turn {current_turn + 1}) ---")
+            logger.info(f"\n--- Assistant LLM (Turn {current_turn + 1}) ---")
             assistant_response_raw = self._llm_generate([{"role": "user", "content": assistant_prompt}])
             assistant_response_content, mentioned_by_assistant = self._extract_and_clean_llm_response(assistant_response_raw)
 
@@ -144,8 +154,9 @@ class SessionSimulator:
             for evidence in self.current_state["remaining_evidences"]:
                 if evidence not in mentioned_by_assistant:
                     final_remaining_evidences_this_turn.append(evidence)
+                    logger.debug(f"assistant LLM 未提及信息: {evidence}")
                 else:
-                    print(f"assistant LLM 已标记提及信息: {evidence}")
+                    logger.info(f"assistant LLM 已标记提及信息: {evidence}")
             self.current_state["remaining_evidences"] = final_remaining_evidences_this_turn
 
             # 更新状态
@@ -155,7 +166,7 @@ class SessionSimulator:
             # 保存当前会话状态和对话历史到缓存
             self._save_session_state()
 
-        print(f"\n--- 对话结束，共进行 {self.current_state['turn_count']} 轮次 ---")
+        logger.info(f"\n--- 对话结束，共进行 {self.current_state['turn_count']} 轮次 ---")
         return self.current_dialog
 
     def _llm_generate(self, messages: List[Dict]) -> str:
@@ -170,11 +181,11 @@ class SessionSimulator:
             for chunk in completion:
                 if chunk.choices[0].delta.content:
                     response_content += chunk.choices[0].delta.content
-            print(f"API response: {response_content}")
+            logger.info(f"API response: {response_content}")
             return response_content
         except Exception as e:
-            print(f"LLM 调用失败: {e}")
-            return "对不起，我暂时无法回应。" # 返回一个默认错误信息
+            logger.error(f"LLM 调用失败: {e}")
+            return "对不起，我暂时无法回应。"  # 返回一个默认错误信息
 
     def _extract_and_clean_llm_response(self, raw_llm_response: str) -> Tuple[str, List[str]]:
         """
@@ -184,22 +195,24 @@ class SessionSimulator:
         Returns:
             Tuple[str, List[str]]: 清理后的对话内容字符串 和 被标记的证据列表。
         """
-        # '(?s)' 使得 '.' 匹配包括换行符在内的所有字符
-        match = re.search(r"EVIDENCES_USED_IN_THIS_TURN:\n(.*?)(?=\n---|$)", raw_llm_response, re.DOTALL)
-        
+        # 放宽正则匹配，允许前后多余空白，换行符兼容 \r\n 和 \n
+        pattern = r"EVIDENCES_USED_IN_THIS_TURN:\s*\r?\n(.*?)(?=\r?\n---|$)"
+        match = re.search(pattern, raw_llm_response, re.DOTALL)
+    
         mentioned_evidences = []
-        dialog_content = raw_llm_response # 默认是完整内容
-
+        dialog_content = raw_llm_response  # 默认是完整内容
+    
         if match:
             evidences_block = match.group(1).strip()
             # 移除证据标记部分，得到真正的对话内容
             dialog_content = raw_llm_response[:match.start()].strip()
-            
+    
             # 从证据块中提取每个证据字符串
-            for line in evidences_block.split('\n'):
+            for line in evidences_block.splitlines():
                 line = line.strip()
                 if line.startswith('- ') and len(line) > 2:
-                    mentioned_evidences.append(line[2:]) # 移除 "- " 前缀
+                    mentioned_evidences.append(line[2:])  # 移除 "- " 前缀
+    
         return dialog_content, mentioned_evidences
 
     def _get_session_cache_file(self, session_hash: str) -> Path:
@@ -222,7 +235,7 @@ class SessionSimulator:
                     self.current_state["remaining_evidences"] = list(self.current_state.get("evidences", []))
                 return True
             except json.JSONDecodeError as e:
-                print(f"缓存文件 {cache_file} 解析失败: {e}")
+                logger.error(f"缓存文件 {cache_file} 解析失败: {e}")
                 return False
         return False
 
@@ -231,12 +244,12 @@ class SessionSimulator:
         将会话状态和对话历史保存到缓存。
         """
         if not self.current_state:
-            print("警告：没有当前会话状态可保存。")
+            logger.warning("警告：没有当前会话状态可保存。")
             return
 
         session_hash = self.current_state.get("session_hash")
         if not session_hash:
-            print("错误：无法获取会话哈希值，无法保存缓存。")
+            logger.error("错误：无法获取会话哈希值，无法保存缓存。")
             return
 
         cache_file = self._get_session_cache_file(session_hash)
@@ -246,9 +259,9 @@ class SessionSimulator:
                     "state": self.current_state,
                     "dialog": self.current_dialog
                 }, f, ensure_ascii=False, indent=2)
-            # print(f"会话状态和对话历史已保存到: {cache_file}")
+            # logger.info(f"会话状态和对话历史已保存到: {cache_file}")
         except IOError as e:
-            print(f"保存缓存文件 {cache_file} 失败: {e}")
+            logger.error(f"保存缓存文件 {cache_file} 失败: {e}")
 
     def _format_chat_history(self, chat_history: List[Dict]) -> str:
         """
