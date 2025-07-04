@@ -67,14 +67,20 @@ class BizFinLoader:
             sessions=sessions,
         )
 
-    def _table_to_evidence_str(self, idx:int, table: Table) -> str:
-        """将表格转换为证据字符串"""
-        evidence = f"Table {idx + 1}\n"
-        for i, row in enumerate(table.rows):
-            row_str = ", ".join([f"{k}: {v}" for k, v in row.items()])
-            evidence += f"Row {i}:\n{row_str}\n"
-        
-        return evidence.strip()
+    def _table_to_evidences(self, table_objects: List[Table]) -> List[str]:
+        """将表格转换为证据列表"""
+        evidences = []
+        for table in table_objects:
+            for row in table.rows:
+                stock_code = row.get("股票代码", "未知代码")
+                stock_name = row.get("股票简称", "未知股票")
+                prefix = f"{stock_name}({stock_code})"
+                for key, value in row.items():
+                    if key in ["股票代码", "股票简称"]:
+                        continue
+                    evidences.append(f"{prefix} {key}: {value}")
+        evidences = list(set(evidences))
+        return evidences
 
     def _extract_session(self, sample: Dict, conversation_id: str, start_index: int) -> Session:
         """从样本中提取会话并重新编号"""
@@ -109,7 +115,7 @@ class BizFinLoader:
             conv_id = conversation_id.split('_')[-1]
             if not( int(conv_id) > 2 and int(start_index) > 3): # DEBUG
                 # 生成表格evidence
-                evidences = [self._table_to_evidence_str(idx, table) for idx,table in enumerate(table_objects)]
+                evidences = self._table_to_evidences(table_objects)
                 # 生成对话回合
                 dialog = self.session_simulator.generate_dialog(
                     evidences=evidences,

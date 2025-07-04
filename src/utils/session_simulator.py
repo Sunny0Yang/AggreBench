@@ -1,13 +1,13 @@
 # utils/session_simulator.py
-
-from typing import Dict, List, Optional
-from pathlib import Path
 import os
 import json
-import time
+import re
 import hashlib
+from typing import Dict, List, Tuple
+from pathlib import Path
 from utils.prompt_templates import SESSION_SIMULATOR_PROMPT
 from client.llm_client import client
+
 
 class SessionSimulator:
     def __init__(self,
@@ -62,7 +62,8 @@ class SessionSimulator:
                 "evidences": evidences,
                 "persona": persona,
                 "turn_count": 0,
-                "paused": False
+                "paused": False,
+                "remaining_evidences": list(evidences)
             }
             self.current_dialog = []
             # 初始化对话
@@ -75,8 +76,6 @@ class SessionSimulator:
 
         # 从加载的状态中获取当前轮次
         current_turn = self.current_state["turn_count"]
-        all_evidences_str = "\n".join([f"- {e}" for e in self.current_state["evidences"]])
-        print(f"all_evidences:{all_evidences_str}")
         # 进行对话轮次
         while current_turn < self.max_turns:
             # 如果启用了暂停机制，且当前不是会话开始的第一步
@@ -96,31 +95,58 @@ class SessionSimulator:
             chat_history_str = self._format_chat_history(self.current_dialog)
                 
             user_prompt = SESSION_SIMULATOR_PROMPT["user"].format(
-                evidences=all_evidences_str,
+                evidences="\n".join(f"- {e}" for e in self.current_state["remaining_evidences"]),
                 persona=self.current_state["persona"],
                 chat_history=chat_history_str
             )
+            if current_turn == self.max_turns - 1 and self.current_state["remaining_evidences"]:
+                user_prompt += "\nCRITICAL: Final turn - MUST cover ALL remaining evidence in one response"
+            print(f"user_prompt: {user_prompt}")
+
             print(f"\n--- User LLM (Turn {current_turn + 1}) ---")
-            user_response = self._llm_generate([{"role": "user", "content": user_prompt}])
+            user_response_raw = self._llm_generate([{"role": "user", "content": user_prompt}])
+            user_response_content, mentioned_by_user = self._extract_and_clean_llm_response(user_response_raw)
+            
             self.current_dialog.append({
                 "id": len(self.current_dialog) + 1,
                 "speaker": "User",
-                "content": user_response,
+                "content": user_response_content, # 存储清理后的内容
             })
+
+            # 更新 remaining_evidences
+            new_remaining_evidences_user = []
+            for evidence in self.current_state["remaining_evidences"]:
+                if evidence not in mentioned_by_user:
+                    new_remaining_evidences_user.append(evidence)
+                else:
+                    print(f"user LLM 已标记提及信息: {evidence}")
+            self.current_state["remaining_evidences"] = new_remaining_evidences_user
+
             # 生成助手响应
             # 助手 LLM 的 prompt 只需要当前对话历史和用户最新输入
             assistant_prompt = SESSION_SIMULATOR_PROMPT["assistant"].format(
-                evidences=all_evidences_str,
+                evidences="\n".join(f"- {e}" for e in self.current_state["remaining_evidences"]),
                 chat_history=self._format_chat_history(self.current_dialog), # 传入更新后的历史
-                user_input=user_response
+                user_input=user_response_content
             )
             print(f"\n--- Assistant LLM (Turn {current_turn + 1}) ---")
-            assistant_response = self._llm_generate([{"role": "user", "content": assistant_prompt}])
+            assistant_response_raw = self._llm_generate([{"role": "user", "content": assistant_prompt}])
+            assistant_response_content, mentioned_by_assistant = self._extract_and_clean_llm_response(assistant_response_raw)
+
             self.current_dialog.append({
                 "id": len(self.current_dialog) + 1,
                 "speaker": "Assistant",
-                "content": assistant_response,
+                "content": assistant_response_content, # 存储清理后的内容
             })
+
+            # 更新 remaining_evidences
+            final_remaining_evidences_this_turn = []
+            for evidence in self.current_state["remaining_evidences"]:
+                if evidence not in mentioned_by_assistant:
+                    final_remaining_evidences_this_turn.append(evidence)
+                else:
+                    print(f"assistant LLM 已标记提及信息: {evidence}")
+            self.current_state["remaining_evidences"] = final_remaining_evidences_this_turn
 
             # 更新状态
             self.current_state["turn_count"] += 1
@@ -133,12 +159,6 @@ class SessionSimulator:
         return self.current_dialog
 
     def _llm_generate(self, messages: List[Dict]) -> str:
-        """
-        调用 LLM 客户端生成响应
-
-        :param messages: LLM 输入消息列表
-        :return: LLM 生成的文本响应
-        """
         try:
             completion = client.chat.completions.create(
                 model=self.model,
@@ -156,6 +176,32 @@ class SessionSimulator:
             print(f"LLM 调用失败: {e}")
             return "对不起，我暂时无法回应。" # 返回一个默认错误信息
 
+    def _extract_and_clean_llm_response(self, raw_llm_response: str) -> Tuple[str, List[str]]:
+        """
+        从原始 LLM 响应中提取标记的证据列表，并返回清理后的响应内容。
+        Args:
+            raw_llm_response: LLM 返回的原始字符串，可能包含证据标记部分。
+        Returns:
+            Tuple[str, List[str]]: 清理后的对话内容字符串 和 被标记的证据列表。
+        """
+        # '(?s)' 使得 '.' 匹配包括换行符在内的所有字符
+        match = re.search(r"EVIDENCES_USED_IN_THIS_TURN:\n(.*?)(?=\n---|$)", raw_llm_response, re.DOTALL)
+        
+        mentioned_evidences = []
+        dialog_content = raw_llm_response # 默认是完整内容
+
+        if match:
+            evidences_block = match.group(1).strip()
+            # 移除证据标记部分，得到真正的对话内容
+            dialog_content = raw_llm_response[:match.start()].strip()
+            
+            # 从证据块中提取每个证据字符串
+            for line in evidences_block.split('\n'):
+                line = line.strip()
+                if line.startswith('- ') and len(line) > 2:
+                    mentioned_evidences.append(line[2:]) # 移除 "- " 前缀
+        return dialog_content, mentioned_evidences
+
     def _get_session_cache_file(self, session_hash: str) -> Path:
         """获取特定会话的缓存文件路径"""
         return self.cache_dir / f"{session_hash}.json"
@@ -172,8 +218,8 @@ class SessionSimulator:
                     cached_data = json.load(f)
                 self.current_state = cached_data.get("state", {})
                 self.current_dialog = cached_data.get("dialog", [])
-                if "evidences" not in self.current_state:
-                    self.current_state["evidences"] = []
+                if "remaining_evidences" not in self.current_state:
+                    self.current_state["remaining_evidences"] = list(self.current_state.get("evidences", []))
                 return True
             except json.JSONDecodeError as e:
                 print(f"缓存文件 {cache_file} 解析失败: {e}")

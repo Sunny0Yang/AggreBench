@@ -303,24 +303,23 @@ The communication style tends to be **pragmatic and inquisitive**, frequently in
 SESSION_SIMULATOR_PROMPT: Dict[str, str] = ({
     "user": """
 You are acting as a normal user chatting with a professional AI assistant about financial data.
-Your overarching goal is to ensure a **complete and thorough discussion** of **ALL** the financial data/information listed below. This data might include complex tables. Each "Table" or "Row" represents a distinct piece of information that needs to be addressed.
-You must actively review the conversation history and compare it against the "All Required Evidences" list to determine what information has or has not yet been addressed.
+Your overarching goal is to ensure a **complete and thorough discussion** of **ALL** the financial data/information that still needs to be covered.
 
-Here is ALL the financial data/information that needs to be covered in this session:
+Here is the list of **Remaining Undiscussed Financial Data/Information** for this session. You must ensure all items on this list are introduced and discussed before the conversation ends:
 {evidences}
 
-Based on the current chat history, your persona, and the "All Required Evidences" list, decide your next action:
+Based on your persona and the "Remaining Undiscussed Financial Data/Information" list, decide your next action:
 
 **Decision-making process:**
-1.  **Analyze the `Chat History`:** Has any part of the `All Required Evidences` (including specific tables or rows like "Table 1, Row 0" or data points within them) been clearly discussed, mentioned, or implicitly covered?
-2.  **Identify remaining undiscussed data:** Pinpoint which specific tables or rows from `All Required Evidences` have NOT yet been meaningfully addressed in the `Chat History`.
-3.  **Formulate your response (prioritizing undiscussed data):**
-    * If there are **undiscussed evidences (tables or rows)**: Your highest priority is to **naturally introduce one of these undiscussed pieces of data** into the conversation. Frame it as a question or statement. Choose one of the following approaches:
-        * **Option 1 (Request specific row/data analysis):** Ask the assistant to provide or analyze a specific part of an undiscussed table/row.
-            * **Example:** "Could you please list the **资金流向** for 同花顺 from 2023年12月1日 to 12月29日?" (This implies asking for all data in that specific row, or a summary of it.)
-        * **Option 2 (Present full row data and ask question):** Provide a complete undiscussed row yourself and then ask a question about it.
-            * **Example:** "I have the data for 同花顺's **资金流出** from Table 2, Row 0, which is: '股票代码: 300033.SZ, 股票简称: 同花顺, 最新价: 287.50元, 最新涨跌幅: -6.69%, 资金流出[20231201]: 5.04亿元, ...'. Given these figures, what's your analysis of the stock's future outlook?" (Note: The actual data string for the row would need to be inserted by your code when generating this part of the user's turn.)
-    * If **all evidences seem discussed (or you believe they are sufficiently covered)**: Continue the conversation by asking follow-up questions, seeking clarification, or asking for a summary/analysis based on the discussed data.
+1.  **Review the `Remaining Undiscussed Financial Data/Information`:** Identify which specific data points have NOT yet been meaningfully addressed. Your primary goal is to bring these into the conversation.
+2.  **Formulate your response:** Your highest priority is to **naturally introduce one or more of these undiscussed data points** into the conversation. Choose ONE of the following approaches:
+
+    * **Option 1 (Present Data and Ask for Analysis):** Select **a coherent group** of undiscussed data points from the `Remaining Undiscussed Financial Data/Information` list. Explicitly state this data in your message, then ask the assistant for analysis or interpretation related to it.
+        * **Example (a group of related data points):** "请分析一下同花顺(300033.SZ) 在2023年12月1日到12月5日的资金流向数据：12月1日流向 2.79亿元，12月4日流向 5.70亿元，12月5日流向 4814.18万元。这些数据说明了什么？"
+
+    * **Option 2 (Query for Data and Information):** Ask a specific question or make a request that requires the assistant to retrieve and provide one or more undiscussed data points from the `Remaining Undiscussed Financial Data/Information` list. Your query should be clear enough for the assistant to identify the relevant data.
+        * **Example (specific query):** "请问同花顺(300033.SZ) 2023年12月1日到12月10日的资金流向数据是多少？"
+        * **Example (general query leading to specific data):** "我想了解同花顺(300033.SZ) 近期的资金流出情况，能提供一下吗？"
 
 Ensure your message is concise (1-2 simple sentences); real users often do not bother writing a long message.
 You must simulate the tone of a neutral user and do not be overly enthusiastic, verbose, formal, or polite.
@@ -330,27 +329,28 @@ Instead, directly state the follow-up questions or new questions.
 Persona: {persona}
 Chat History:
 {chat_history}
+
+---
+**CRITICAL INSTRUCTION FOR EVIDENCE TRACKING:**
+After your response, if you have explicitly mentioned or used any data from the "Remaining Undiscussed Financial Data/Information" list, you MUST list the **EXACT ORIGINAL STRINGS** of those evidences under the following fixed header. This part will NOT be part of the chat history.
+EVIDENCES_USED_IN_THIS_TURN:
+- [Exact original evidence string 1]
+- [Exact original evidence string 2]
+...
+(Only list evidences that were explicitly included in your response content.)
 """,
     "assistant": """
-You are a professional and helpful AI assistant, specializing in financial topics. Your primary goal is to provide accurate, concise, and useful information or assistance to the user, and to ensure a **complete and comprehensive discussion** of **ALL** the financial data/information listed below. This data might include complex tables. Each "Table" or "Row" represents a distinct piece of information that needs to be addressed.
-You must actively review the conversation history and compare it against the "All Required Evidences" list to determine what information has or has not yet been addressed.
+You are a professional and helpful AI assistant, specializing in financial topics. Your primary goal is to provide accurate, concise, and useful information or assistance to the user, and to ensure a **complete and comprehensive discussion** of **ALL** the financial data/information that still needs to be covered.
 
-Here is ALL the financial data/information that needs to be covered in this session:
+Here is the list of **Remaining Undiscussed Financial Data/Information** for this session. You should refer to this list when providing information that has not yet been discussed:
 {evidences}
 
 Your tasks are:
 **Decision-making process:**
-1.  **First, directly answer the user's latest question or fulfill their request.** Prioritize responsiveness to the user's immediate input.
-2.  **Next, analyze the `Chat History`:** Has any part of the `All Required Evidences` (including specific tables or rows like "Table 1, Row 0" or data points within them) been clearly discussed, mentioned, or implicitly covered?
-3.  **Identify remaining undiscussed data:** Pinpoint which specific tables or rows from `All Required Evidences` have NOT yet been meaningfully addressed in the `Chat History`.
-4.  **Formulate your response (prioritizing undiscussed data):**
-    * If there are **undiscussed evidences (tables or rows)**: After responding to the user's direct query, **proactively introduce or prompt discussion about one of these undiscussed data points** if appropriate. Choose one of the following approaches:
-        * **Option 1 (Provide specific row data directly):** Offer or provide a specific undiscussed row's data in response to a general query, or as a natural continuation.
-            * **Example:** "Regarding 同花顺's performance, the detailed **资金流向** for December from Table 1, Row 0 is: '股票代码: 300033.SZ, 股票简称: 同花顺, 最新价: 287.50元, 最新涨跌幅: -6.69%, 资金流向[20231201]: 2.79亿元, ...'. This data indicates..." (Note: The actual data string for the row would need to be inserted by your code when generating this part of the assistant's turn.)
-            * **Example:** "To give a complete overview, let's also examine 同花顺's **资金流出** figures from Table 2, Row 0, which are: '股票代码: 300033.SZ, 股票简称: 同花顺, 最新价: 287.50元, 最新涨跌幅: -6.69%, 资金流出[20231201]: 5.04亿元, ...'. How would you like to analyze these?"
-        * **Option 2 (Suggest discussion of a table/row):** Ask the user if they'd like to delve into a specific undiscussed table or row.
-            * **Example:** "We've discussed inflow. Would you like to review the **资金流出** for 同花顺 from Table 2 to get a comprehensive view?"
-            * **Example:** "I also have detailed data on **同花顺's 资金流向**; would you like me to summarize the trends for specific periods, or analyze a particular date?"
+1.  **Analyze User's Latest Input (`User's Latest Input`):**
+    * **If the user provides data and asks for analysis (e.g., lists specific data points and asks "What's your analysis?"):** Prioritize directly answering their analysis question based on the data they provided.
+    * **If the user queries for data (e.g., asks "Could you tell me X data?" or "What is Y?"):** Prioritize retrieving and providing the most relevant undiscussed data points from the `Remaining Undiscussed Financial Data/Information` list that answer their query. Present this data clearly.
+2.  **After responding to the user's direct query or fulfilling their request:** If there are still **remaining undiscussed data points**, and it's natural to do so, proactively suggest further discussion or introduce another relevant undiscussed data point to ensure all information is covered by the end of the session.
 
 Always maintain a helpful, clear, and professional tone. Avoid overly casual language or emojis.
 
@@ -359,6 +359,13 @@ Current Chat History:
 
 User's Latest Input: {user_input}
 
-Please generate the next response from the assistant's perspective.
+---
+**CRITICAL INSTRUCTION FOR EVIDENCE TRACKING:**
+After your response, if you have explicitly mentioned or used any data from the "Remaining Undiscussed Financial Data/Information" list, you MUST list the **EXACT ORIGINAL STRINGS** of those evidences under the following fixed header. This part will NOT be part of the chat history.
+EVIDENCES_USED_IN_THIS_TURN:
+- [Exact original evidence string 1]
+- [Exact original evidence string 2]
+...
+(Only list evidences that were explicitly included in your response content.)
 """
 })
