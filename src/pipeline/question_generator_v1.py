@@ -108,17 +108,16 @@ class QuestionGenerator:
             context += f"### Session ID: {session.id}\n"
             
             # 检测是否是表格数据
-            # print(f"Session Type: {session.type}")
-            is_table_data = (session.type == "table")
-            # print(f"Is table data: {is_table_data}")  # DEBUG
-            if is_table_data:
+            if session.tables:
                 # 表格数据处理
                 context += "Data Type: Structured Table\n"
                 # 添加数据行
-                context += "Data Rows:\n"
-                for turn in session.turns:
-                    if "Row" in turn.content:
-                        context += f"- {turn.content}\n"
+                
+                for idx, table in enumerate(session.tables):
+                    context += f"Table {idx}:\n"
+                    for row_idx, row in enumerate(table.rows):
+                        row_content = (',').join(f"{k}: {v}" for k, v in row.items())
+                        context += f"Row {row_idx}: {row_content}\n"
             else:
                 # 常规对话处理
                 context += f"Time: {session.time}\n"
