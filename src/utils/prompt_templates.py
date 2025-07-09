@@ -168,12 +168,12 @@ Generation Requirements (Easy Level):
 {{
     "question": "Question text",
     "answer": "The answer is: [numeric value or concise response]", # MUST start with "The answer is:"
-    "evidence": ["Session <session_id>: Row <row_identifier>: <Column_Name>: <value>"] # Exactly 1 evidence entry. Use the most relevant row ID.
+    "evidence": ["<Identifier Column Name>: <Identifier Value>; <Target Column Name>: <Target Value>"] # Exactly 1 evidence entry.
 }}
 5.  **Evidence Requirements**:
     - **CRITICAL: Evidence MUST be direct and highly relevant to the question's claim.**
     - **ONLY include the single, most direct evidence entry that is absolutely necessary to derive the answer.**
-    - References MUST use "Session <session_id>: Row <row_identifier>: <Column_Name>: <value>" format.
+    - References MUST use "<Identifier Column Name>: <Identifier Value>; <Target Column Name>: <Target Value>" format.
     - The evidence provided must directly contain the value or data points used in the aggregation.
     - Must contain exactly 1 distinct evidence entry.
 6.  **Answer Formatting**:
@@ -186,11 +186,11 @@ Example:
 {{
     "question": "What is the latest stock price for 同花顺 (300033.SZ)?",
     "answer": "The answer is: 287.50",
-    "evidence": ["Row 1: 最新价: 287.50元"]
+    "evidence": ["股票简称: 同花顺; 最新价: 287.50元"]
 }}
 """,
     
-    "structured_medium_template_en": """
+"structured_medium_template_en": """
 Please generate an aggregative query question of *medium difficulty* based on the provided structured table data.
 This question should involve either:
 - A two-step aggregation (e.g., AVG requires SUM and COUNT implicitly).
@@ -207,13 +207,13 @@ Generation Requirements (Medium Level):
 {{
     "question": "Question text",
     "answer": "The answer is: [numeric value or concise response]",
-    "evidence": ["Session <session_id>: Row <row_identifier>: <Column_Name>: <value>", ...] # 2-3 evidence entries.
+    "evidence": ["<Identifier Column Name>: <Identifier Value>; <Column_Name_1>: <value_1>; <Column_Name_2>: <value_2>", ...] # 2-3 evidence entries.
 }}
 5.  **Evidence Requirements**:
     - **CRITICAL: Evidence MUST be direct and highly relevant to the question's claim.**
     - **ONLY include evidence that is absolutely necessary to derive the answer.**
     - If there aren't enough direct evidences to meet 'min_evidences' (2), *do not generate the question*.
-    - References MUST use "Session <session_id>: Row <row_identifier>: <Column_Name>: <value>" format.
+    - References MUST use "<Identifier Column Name>: <Identifier Value>; <Column_Name_1>: <value_1>; <Column_Name_2>: <value_2>" format. If multiple column/value pairs are from the same identifier, separate them with a semicolon ';'.
     - Quotes MUST be verbatim and directly support the answer's calculation or claim.
     - Each evidence entry MUST contribute directly to the calculation or understanding required to answer.
     - Must contain 2-3 distinct evidence entries.
@@ -228,11 +228,9 @@ Example:
     "question": "What is the average daily capital inflow for 同花顺 (300033.SZ) in the first week of December 2023 (Dec 1st to Dec 7th)?",
     "answer": "The answer is: 263435420.0",
     "evidence": [
-        "Row 1: 资金流向[20231201]: 2.79亿元",
-        "Row 1: 资金流向[20231204]: 5.70亿元",
-        "Row 1: 资金流向[20231205]: 4814.18万元",
-        "Row 1: 资金流向[20231206]: 243.55万元",
-        "Row 1: 资金流向[20231207]: 1.62亿元"
+        "股票简称: 同花顺; 资金流向[20231201]: 2.79亿元",
+        "股票简称: 同花顺; 资金流向[20231204]: 5.70亿元",
+        "股票简称: 同花顺; 资金流向[20231205]: 4814.18万元"
     ]
 }}
 """,
@@ -256,13 +254,13 @@ Generation Requirements (Hard Level):
 {{
     "question": "Question text",
     "answer": "The answer is: [numeric value or concise response]",
-    "evidence": ["Session <session_id>: Row <row_identifier>: <Column_Name>: <value>", ...] # 4-5 evidence entries.
+    "evidence": ["<Identifier>: <Column_Name>: <value>; <Another_Column_Name>: <value>", ...] # 4-5 evidence entries.
 }}
 6.  **Evidence Requirements**:
     - **CRITICAL: Evidence MUST be direct and highly relevant to the question's claim.**
     - **ONLY include evidence that is absolutely necessary to derive the answer.**
     - If there aren't enough direct evidences to meet 'min_evidences' (4), *do not generate the question*.
-    - References MUST use "Session <session_id>: Row <row_identifier>: <Column_Name>: <value>" format.
+    - References MUST use "<Identifier>: <Column_Name>: <value>" format. If multiple column/value pairs are from the same identifier, separate them with a semicolon ';'.
     - Quotes MUST be verbatim and directly support the answer's calculation or claim.
     - Each evidence entry MUST contribute directly to the complex calculation or understanding required to answer.
     - Must contain 4-5 distinct evidence entries.
@@ -277,16 +275,62 @@ Example:
     "question": "Between December 1st and December 15th, 2023, what was the average *positive* daily capital inflow for 同花顺 (300033.SZ) after excluding days with negative flow?",
     "answer": "The answer is: 205696144.0",
     "evidence": [
-        "Row 1: 资金流向[20231201]: 2.79亿元",
-        "Row 1: 资金流向[20231204]: 5.70亿元",
-        "Row 1: 资金流向[20231205]: 4814.18万元",
-        "Row 1: 资金流向[20231206]: 243.55万元",
-        "Row 1: 资金流向[20231207]: 1.62亿元",
-        "Row 1: 资金流向[20231208]: 4.56亿元",
-        "Row 1: 资金流向[20231211]: 3.57亿元",
-        # Note: D12, D13, D14, D15 are negative or missing, not included as positive inflow evidence
+        "股票简称: 同花顺; 资金流向[20231201]: 2.79亿元",
+        "股票简称: 同花顺; 资金流向[20231204]: 5.70亿元",
+        "股票简称: 同花顺; 资金流向[20231205]: 4814.18万元",
+        "股票简称: 同花顺; 资金流向[20231206]: 243.55万元",
+        "股票简称: 同花顺; 资金流向[20231207]: 1.62亿元",
+        "股票简称: 同花顺; 资金流向[20231208]: 4.56亿元",
+        "股票简称: 同花顺; 资金流向[20231211]: 3.57亿元"
     ]
 }}
+""",
+
+"sql_prompt_template": """
+You are an advanced AI assistant specializing in generating precise SQL queries based on natural language questions and provided table schemas and data. Your task is to generate two distinct SQL queries: one to retrieve the **answer** to the given question and another to identify the **evidence** supporting that answer, both from the provided tables.
+
+---
+
+### **Instructions:**
+
+1.  **Analyze the Question:** Carefully understand the user's question to identify the specific information being requested.
+2.  **Examine the Tables:** Review the provided table schemas and their sample data to determine which tables and columns are relevant to answer the question and find supporting evidence.
+3.  **Generate Answer SQL Query (`SQL_ANSWER`):**
+    * Construct an SQL query that, when executed, will directly yield the answer to the user's question.
+    * Ensure the query is syntactically correct and references the tables and columns accurately.
+    * Prioritize queries that return the most concise and direct answer.
+    * Use appropriate SQL clauses (e.g., `SELECT`, `FROM`, `WHERE`, `JOIN`, `GROUP BY`, `ORDER BY`, aggregate functions) as needed.
+4.  **Generate Evidence SQL Query (`SQL_EVIDENCE`):**
+    * Construct a *separate* SQL query that, when executed, will retrieve the data points from the tables that serve as **direct evidence** for the answer.
+    * **CRITICAL:** For each row selected as evidence, ensure you `SELECT` an identifying column (e.g., "股票简称", "股票代码") alongside the relevant evidence columns. This is essential for linking the evidence back to a specific entity.
+    * This query should ideally return the foundational facts or figures that lead to the answer.
+    * Consider returning relevant columns from the rows that contain the key information.
+    * Ensure the query is syntactically correct and references the tables and columns accurately.
+    * Use appropriate SQL clauses as needed.
+
+---
+### **Table Information:**
+
+{tables}
+
+---
+
+### **Question:**
+
+{question}
+
+---
+
+### **Output Format:**
+
+Provide your response in the following format. Ensure there are no additional explanations or text, only the two SQL queries.
+
+```sql
+SQL_ANSWER:
+SELECT ... FROM ... WHERE ...;
+
+SQL_EVIDENCE:
+SELECT ... FROM ... WHERE ...;
 """
 })
 

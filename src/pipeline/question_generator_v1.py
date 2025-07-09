@@ -5,7 +5,8 @@ import logging
 import random
 import time
 import os
-from typing import List, Dict, Literal
+import re
+from typing import Any, List, Dict, Literal
 from utils.params import get_base_parser, qa_generation_args
 from utils.logger import setup_logging
 from utils.prompt_templates import QA_GENERATION_PROMPTS
@@ -109,15 +110,16 @@ class QuestionGenerator:
             
             # 检测是否是表格数据
             if session.tables:
-                # 表格数据处理
                 context += "Data Type: Structured Table\n"
-                # 添加数据行
-                
                 for idx, table in enumerate(session.tables):
-                    context += f"Table {idx}:\n"
+                    context += f"Table {idx}:\n" # Keep Table ID for context if multiple tables per session
                     for row_idx, row in enumerate(table.rows):
-                        row_content = (',').join(f"{k}: {v}" for k, v in row.items())
-                        context += f"Row {row_idx}: {row_content}\n"
+                        # Attempt to find a '股票简称' or '股票代码' as a primary identifier for the row
+                        identifier = row.get("股票简称") or row.get("股票代码") or f"Row {row_idx}"
+                        context += f"  Entity: {identifier}\n" # Identify the entity for the row
+                        for k, v in row.items():
+                            # Present each column as "Column_Name: Value"
+                            context += f"    {k}: {v}\n"
             else:
                 # 常规对话处理
                 context += f"Time: {session.time}\n"
@@ -202,24 +204,8 @@ class QuestionGenerator:
 
             return temp
         except json.JSONDecodeError:
-            # 尝试提取JSON部分
-            import re
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                try:
-                    return json.loads(json_match.group(0))
-                except:
-                    pass
-            return self._parse_fallback(response)
-
-    def _parse_fallback(self, text: str) -> Dict:
-        """应急解析方案"""
-        import re
-        return {
-            "question": re.search(r'question[:：]?\s*(.*?)(?=\n|$)', text).group(1).strip() if re.search(r'question[:：]?\s*(.*?)(?=\n|$)', text) else "未知问题",
-            "answer": re.search(r'answer[:：]?\s*(.*?)(?=\n|$)', text).group(1).strip() if re.search(r'answer[:：]?\s*(.*?)(?=\n|$)', text) else "未知答案",
-            "evidence": [e.strip() for e in re.findall(r'evidence[:：]?\s*(.*?)(?=\n|$)', text)] if re.findall(r'evidence[:：]?\s*(.*?)(?=\n|$)', text) else ["未知证据"]
-        }
+            self.logger.error("解析响应失败，尝试使用应急解析方案")
+            return None
 
 def load_data(input_path: str) -> ConversationDataset:
     """加载并转换数据为ConversationDataset对象"""
@@ -273,7 +259,7 @@ def save_results(results: List[Dict], output_path: str):
         raise Exception(f"保存结果到 {output_path} 时出错: {e}") from e
 
 def main():
-    logger.info(f"Starting QA generation for: {args.input_data}")
+    logger.info(f"Starting QA generation V1 for: {args.input_data}")
     
     # 初始化生成器
     qa_generator = QuestionGenerator(
