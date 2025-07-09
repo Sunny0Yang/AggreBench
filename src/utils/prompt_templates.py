@@ -337,7 +337,6 @@ EVIDENCES_USED_IN_THIS_TURN:
 - [Exact original evidence string 1]
 - [Exact original evidence string 2]
 ...
-(Only list evidences that were explicitly included in your response content.)
 """,
     "assistant": """
 You are a professional and helpful AI assistant, specializing in financial topics. Your primary goal is to provide accurate, concise, and useful information or assistance to the user, and to ensure a **complete and comprehensive discussion** of **ALL** the financial data/information that still needs to be covered.
@@ -366,6 +365,5 @@ EVIDENCES_USED_IN_THIS_TURN:
 - [Exact original evidence string 1]
 - [Exact original evidence string 2]
 ...
-(Only list evidences that were explicitly included in your response content.)
 """
 })

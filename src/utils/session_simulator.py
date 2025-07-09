@@ -54,8 +54,9 @@ class SessionSimulator:
         """
         # 创建一个哈希值作为该会话的唯一标识，用于缓存
         # 包含 evidences 和 persona，确保相同参数的会话能加载同一缓存
+        sorted_evidences = sorted(evidences)
         session_hash = hashlib.md5(
-            f"{json.dumps(evidences, sort_keys=True)}_{persona}".encode()
+            f"{json.dumps(sorted_evidences, ensure_ascii=False)}_{persona}".encode("utf-8")
         ).hexdigest()
 
         # 尝试从缓存加载会话状态和对话历史
