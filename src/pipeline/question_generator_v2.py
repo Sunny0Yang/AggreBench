@@ -11,6 +11,7 @@ import math
 
 # 导入v1版本的基类
 from .question_generator_v1 import QuestionGenerator as QuestionGeneratorV1
+from .question_generator_v1 import load_data, save_results
 
 class QuestionGenerator(QuestionGeneratorV1):
     def __init__(self, *args, **kwargs):
@@ -24,24 +25,25 @@ class QuestionGenerator(QuestionGeneratorV1):
         all_qa = []
         idx = 0
         for conversation in dataset.conversations:
-            idx += 1
             # 跳过会话数量不足的对话
             if len(conversation.sessions) < self.min_sessions:
                 self.logger.warning(f"对话 {conversation.id} 会话数不足 ({len(conversation.sessions)} < {self.min_sessions})，跳过")
                 continue
             ##DEBUG
-            if idx > 2:
+            if idx > 1:
                 break
 
             for qa_index in range(self.num_qa):
                 # 选择会话和构建上下文
-                session_count = random.randint(
-                    self.min_sessions, 
-                    min(self.max_sessions, len(conversation.sessions))
-                )
-                selected_sessions = random.sample(conversation.sessions, session_count)
-                selected_sessions.sort(key=lambda s: self._extract_session_number(s.id))
+                # session_count = random.randint(
+                #     self.min_sessions, 
+                #     min(self.max_sessions, len(conversation.sessions))
+                # )
+                # selected_sessions = random.sample(conversation.sessions, session_count)
+                # selected_sessions.sort(key=lambda s: self._extract_session_number(s.id))
                 
+                selected_sessions = conversation.sessions
+
                 # 第一阶段：使用LLM生成初始QA对
                 session_context = self._build_session_context(selected_sessions)
                 qa_response = self.generate_qa(session_context)
@@ -54,6 +56,11 @@ class QuestionGenerator(QuestionGeneratorV1):
                 answer_llm = qa_dict.get("answer")
                 evidence_llm = qa_dict.get("evidence")
                 
+                self.logger.info(f"QA{qa_index}生成成功")
+                self.logger.info(f"Question: {question}")
+                self.logger.info(f"Answer LLM: {answer_llm}")
+                self.logger.info(f"Evidence LLM: {evidence_llm}")
+
                 # 第二阶段：SQL验证与智能修正
                 qa_dict = self.validate_and_correct(
                     question=question,
@@ -69,6 +76,8 @@ class QuestionGenerator(QuestionGeneratorV1):
                 qa_dict["participants"] = conversation.speakers
                 
                 all_qa.append(qa_dict)
+            
+            idx += 1
         
         return all_qa
 
@@ -79,8 +88,7 @@ class QuestionGenerator(QuestionGeneratorV1):
             "question": question,
             "answer": answer_llm,
             "evidence": evidence_llm,
-            "status": "not yet",
-            "errors": 0
+            "status": ""
         }
         
         # 创建SQL引擎
@@ -114,28 +122,27 @@ class QuestionGenerator(QuestionGeneratorV1):
             # 执行答案查询
             answer_results = sql_engine.execute_query(answer_query)
             answer_sql = answer_results[0][list(answer_results[0].keys())[0]] if answer_results else None
-            
+            self.logger.info(f"Answer SQL Result: {answer_sql}")
             # 执行证据查询
             evidence_results= sql_engine.execute_query(evidence_query)
-            
+            self.logger.info(f"Evidence SQL Result: {evidence_results}")
             # 双阶段验证
+            self.logger.info(f"开始验证")
             answer_match = self.validator.compare_answers(answer_llm, answer_sql)
             evidence_match = self.validator.compare_evidence(evidence_llm, evidence_results)
             
             if answer_match and evidence_match:
-                # 完全验证通过
                 result["answer"] = answer_llm
                 result["evidence"] = evidence_llm
                 result["status"] = "match"
                 return result
             elif not evidence_match:
-                result["errors"] += 1
+                result["status"] += "evidence not match"
             elif not answer_match:
-                result["errors"] += 2
+                result["status"] += "answer not match"
             
             result["sql_answer"] = answer_sql
-            result["sql_evidence"] = evidence_sql
-            result["status"] = "not match"
+            result["sql_evidence"] = evidence_results
             return result
                 
         except Exception as e:
@@ -185,22 +192,41 @@ class QuestionGenerator(QuestionGeneratorV1):
             self.logger.error(f"SQL生成失败: {e}")
             return ""
     
+    def _clean_sql(self, sql_string: str) -> str:
+        cleaned = re.sub(r'^\s*```(?:sql)?\s*|\s*```\s*$', '', sql_string, flags=re.IGNORECASE | re.DOTALL)
+        cleaned = cleaned.strip()
+        statements = [s.strip() for s in cleaned.split(';') if s.strip()]
+        if len(statements) > 1:
+            self.logger.warning(f"检测到多个SQL语句，只使用第一个: '{cleaned}'")
+            return statements[0]
+        elif statements:
+            return statements[0]
+        else:
+            return ""
+
     def parse_double_query(self, sql_text: str) -> Tuple[str, str]:
-        """解析双查询响应"""
+        answer_sql = ""
+        evidence_sql = ""
         answer_match = re.search(
-            r'SQL_ANSWER:\s*(.*?)(?=\nSQL_EVIDENCE:|$)',
+            r'SQL_ANSWER:\s*(.*?)(?=(?:SQL_EVIDENCE:|$))', 
             sql_text,
             re.DOTALL | re.IGNORECASE
         )
+
         evidence_match = re.search(
             r'SQL_EVIDENCE:\s*(.*)',
             sql_text,
             re.DOTALL | re.IGNORECASE
         )
-        if not answer_match or not evidence_match:
-            self.logger.warning(f"无效的双查询格式: {sql_text}")
-            raise ValueError()  
-        return answer_match.group(1).strip(), evidence_match.group(1).strip()
+
+        if answer_match:
+            answer_sql = self._clean_sql(answer_match.group(1))
+        if evidence_match:
+            evidence_sql = self._clean_sql(evidence_match.group(1))
+        if not answer_sql or not evidence_sql:
+            self.logger.warning(f"无效的双查询格式或未能成功解析SQL。原始文本: {sql_text}")
+            raise ValueError("未能解析LLM的SQL响应，格式不正确或缺少SQL。")
+        return answer_sql, evidence_sql
 
 def main():
     logger.info(f"Starting QA generation V2 for: {args.input_data}")
@@ -235,6 +261,11 @@ def main():
     logger.info(f"QA generation complete. Output to: {args.output_dir}")
 
 if __name__ == "__main__":
+    import time
+    import os
+    import argparse
+    from utils.params import get_base_parser, qa_generation_args
+    from utils.logger import setup_logging
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     os.environ['LOG_FILE'] = f"qa_gen_{timestamp}.log"
     logger = setup_logging()
