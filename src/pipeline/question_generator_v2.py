@@ -136,10 +136,10 @@ class QuestionGenerator(QuestionGeneratorV1):
                 result["evidence"] = evidence_llm
                 result["status"] = "match"
                 return result
-            elif not evidence_match:
-                result["status"] += "evidence not match"
-            elif not answer_match:
-                result["status"] += "answer not match"
+            if not evidence_match:
+                result["status"] += "evidence not match; "
+            if not answer_match:
+                result["status"] += "answer not match;"
             
             result["sql_answer"] = answer_sql
             result["sql_evidence"] = evidence_results
