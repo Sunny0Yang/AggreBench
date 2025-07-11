@@ -11,7 +11,7 @@ from utils.params import get_base_parser, qa_generation_args
 from utils.logger import setup_logging
 from utils.prompt_templates import QA_GENERATION_PROMPTS
 from client.llm_client import client
-from utils.struct import MultiModalTurn, Session, Conversation, ConversationDataset
+from utils.struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset
 
 DifficultyLevel = Literal["easy", "medium", "hard"]
 
@@ -110,6 +110,7 @@ class QuestionGenerator:
             
             # 检测是否是表格数据
             if session.tables:
+                self.logger.info(f"会话 {session.id} 构建表格上下文")
                 context += "Data Type: Structured Table\n"
                 for idx, table in enumerate(session.tables):
                     context += f"Table {idx}:\n" # Keep Table ID for context if multiple tables per session
@@ -122,6 +123,7 @@ class QuestionGenerator:
                             context += f"    {k}: {v}\n"
             else:
                 # 常规对话处理
+                self.logger.info(f"会话 {session.id} 构建对话上下文")
                 context += f"Time: {session.time}\n"
                 context += f"Participants: {', '.join(session.participants)}\n"
                 context += "Dialogs:\n"
@@ -188,7 +190,7 @@ class QuestionGenerator:
             temp = json.loads(response.strip())
             # 确保 'answer' 字段的解析能处理数字或字符串
             if isinstance(temp.get("answer"), str):
-                match = re.search(r"^The answer is:\s*([0-9]+(?:\.[0-9]+)?)", temp["answer"])
+                match = re.search(r"^The answer is:\s*(-?[0-9]+(?:\.[0-9]+)?)", temp["answer"])
                 if match:
                     temp["answer"] = float(match.group(1))
                 else:
@@ -228,12 +230,20 @@ def load_data(input_path: str) -> ConversationDataset:
                     )
                     turns.append(turn)
                 
+                tables = []
+                for table_data in session_data.get("tables", []):
+                    headers = table_data.get("headers", [])
+                    rows = table_data.get("rows", [])
+                    table = Table(headers=headers, rows=rows)
+                    tables.append(table)
+
                 session = Session(
                     session_id=session_data.get("session_id", f"session_{len(sessions)+1}"),
                     time=session_data.get("time", "Unknown"),
                     participants=session_data.get("participants", ["Participant A", "Participant B"]),
                     turns=turns,
-                    type=session_data.get("type", "conversation")
+                    type=session_data.get("type", "conversation"),
+                    tables=tables
                 )
                 sessions.append(session)
             
