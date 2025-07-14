@@ -78,12 +78,12 @@ def process_qa(manager: MemoryManager, qa: dict, dataset: dict) -> dict:
         "tokens_used": 0
     }
     
-    # try:
-    #     # 添加相关会话到记忆
-    #     add_memories_for_qa(manager, qa, dataset)
-    # except Exception as e:
-    #     logger.error(f"添加记忆失败{result['qa_id']}: {str(e)}")
-    #     result["error"] = str(e)    
+    try:
+        # 添加相关会话到记忆
+        add_memories_for_qa(manager, qa, dataset)
+    except Exception as e:
+        logger.error(f"添加记忆失败{result['qa_id']}: {str(e)}")
+        result["error"] = str(e)    
     try:    # 执行搜索和生成
         start_time = datetime.now()
         memories = manager.mem_search(qa)

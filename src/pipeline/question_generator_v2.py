@@ -29,9 +29,6 @@ class QuestionGenerator(QuestionGeneratorV1):
             if len(conversation.sessions) < self.min_sessions:
                 self.logger.warning(f"对话 {conversation.id} 会话数不足 ({len(conversation.sessions)} < {self.min_sessions})，跳过")
                 continue
-            ##DEBUG
-            if idx > 1:
-                break
 
             for qa_index in range(self.num_qa):
                 # 选择会话和构建上下文

@@ -42,9 +42,6 @@ class QuestionGenerator:
             if len(conversation.sessions) < self.min_sessions:
                 self.logger.warning(f"对话 {conversation.id} 会话数不足 ({len(conversation.sessions)} < {self.min_sessions})，跳过")
                 continue
-            ##DEBUG
-            if idx > 2:
-                break
             # 为每个对话生成指定数量的QA对
             for qa_index in range(self.num_qa):
                 # 在对话内随机选择会话
@@ -179,7 +176,6 @@ class QuestionGenerator:
             if chunk.choices[0].delta.content:
                 response_content += chunk.choices[0].delta.content
 
-        print(f"API response: {response_content}")  # DEBUG
         return response_content
 
     def _parse_response(self, response: str) -> Dict:

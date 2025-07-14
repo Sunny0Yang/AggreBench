@@ -80,7 +80,7 @@ class Mem0Manager(MemoryManager):  # 继承基类MemoryManager
             )
             logger.info(f"生成回答")
             response = client.chat.completions.create(
-                model=os.getenv("MODEL", "qwen3-32b"),
+                model=os.getenv("MODEL"),
                 messages=[{"role": "user", "content": prompt}],
                 stream=False,
                 extra_body={"enable_thinking": False} 

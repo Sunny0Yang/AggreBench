@@ -113,22 +113,21 @@ class BizFinLoader:
         turns = []
         if self.generate_pseudo_dialogue:
             conv_id = conversation_id.split('_')[-1]
-            if not( int(conv_id) > 2 and int(start_index) > 3): # DEBUG
-                # 生成表格evidence
-                evidences = self._table_to_evidences(table_objects)
-                # 生成对话回合
-                dialog = self.session_simulator.generate_dialog(
-                    evidences=evidences,
-                    persona=self.persona
-                )
-                
-                # 转换为MultiModalTurn对象
-                for turn_idx, turn in enumerate(dialog):
-                    turns.append(MultiModalTurn(
-                        turn_id=f"{session_id}_turn_{turn_idx+1}",
-                        speaker=turn["speaker"],
-                        content=turn["content"]
-                    ))
+            # 生成表格evidence
+            evidences = self._table_to_evidences(table_objects)
+            # 生成对话回合
+            dialog = self.session_simulator.generate_dialog(
+                evidences=evidences,
+                persona=self.persona
+            )
+            
+            # 转换为MultiModalTurn对象
+            for turn_idx, turn in enumerate(dialog):
+                turns.append(MultiModalTurn(
+                    turn_id=f"{session_id}_turn_{turn_idx+1}",
+                    speaker=turn["speaker"],
+                    content=turn["content"]
+                ))
         else:
             # 如果不需要伪对话，添加简单的表头信息
             turns.append(MultiModalTurn(
