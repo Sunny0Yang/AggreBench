@@ -15,9 +15,9 @@ def data_loader_args(parser):
                         default=os.getenv('PROCESSED_DIR'),
                         help='Output directory for processed data')
     parser.add_argument("--generate_pseudo_dialogue", action="store_true",
-                    help="是否生成伪对话")
+                        help="是否生成伪对话")
     parser.add_argument("--model", type=str,
-                        default=os.getenv('LLM_MODEL', 'gpt-3.5-turbo'), # 从环境变量获取，或提供默认值
+                        default=os.getenv('LLM_MODEL'),
                         help="LLM model name to use for session simulation.")
     parser.add_argument("--max_turns", type=int,
                         default=6,
@@ -28,17 +28,17 @@ def data_loader_args(parser):
                         default="./dialog_cache",
                         help="Directory to cache generated dialogues.")
     parser.add_argument("--combine_size", type=int,
-                        default=10, 
+                        default=10,
                         help="Number of data entries to combine before processing.")
     return parser
 
 def qa_generation_args(parser):
-    parser.add_argument('input_data', type=str, 
+    parser.add_argument('input_data', type=str,
                         help='Path to dataset file')
     parser.add_argument('--model', type=str,
-                        default=os.getenv('MODEL','qwen3'),
+                        default=os.getenv('MODEL'),
                         help='LLM model to use')
-    parser.add_argument('--output_dir', type=str, 
+    parser.add_argument('--output_dir', type=str,
                         default=os.getenv('QA_DIR'),
                         help='Output directory for QA pairs')
 
@@ -52,12 +52,11 @@ def qa_generation_args(parser):
                         help='Min number of evidences per question')
     parser.add_argument('--max_evidences', type=int, default=15,
                         help='Max number of evidences per question')
-    parser.add_argument('--num_qa', type=int, default=10,
-                        help='Number of QA pairs per conversation to generate')
-    parser.add_argument("--difficulty",type=str,choices=["easy", "medium", "hard"],
-                        default="easy",help="Difficulty level of the generated questions (easy, medium, hard).")
+    parser.add_argument("--easy", type=int, default=0,
+                        help="Number of easy questions to generate.")
+    parser.add_argument("--medium", type=int, default=0,
+                        help="Number of medium questions to generate.")
+    parser.add_argument("--hard", type=int, default=0,
+                        help="Number of hard questions to generate.")
+
     return parser
-
-
-# 类似的其他阶段的参数函数
-# add_session_generation_args(), add_composition_args()...

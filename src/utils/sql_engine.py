@@ -100,7 +100,8 @@ class SqlEngine:
             
             try:
                 cursor.execute(create_table_sql)
-                logger.info(f"成功创建表结构: {table_name} ({create_table_sql})")
+                logger.info(f"成功创建表: {table_name}")
+                logger.debug(f"表结构: {create_table_sql}")
 
                 # Insert data
                 if table.rows:
@@ -110,7 +111,7 @@ class SqlEngine:
                     # Columns list for INSERT statement, using original headers directly and quoting them
                     insert_columns = ", ".join(f'"{h}"' for h in table.headers)
                     insert_sql = f'INSERT INTO {table_name} ({insert_columns}) VALUES ({placeholders})'
-                    
+                    logger.debug(f"插入语句: {insert_sql}")
                     for row in table.rows:
                         values_for_insert = []
                         for h in table.headers:
@@ -139,6 +140,7 @@ class SqlEngine:
             cursor.execute(query)
             results = [dict(row) for row in cursor.fetchall()]
             logger.info(f"查询执行成功。结果数量: {len(results)}")
+            logger.debug(f"查询结果: {results}")
             return results
         except sqlite3.Error as e:
             logger.error(f"执行查询失败: '{query}' -> {e}")
