@@ -179,7 +179,7 @@ Generation Requirements (Easy Level):
 6.  **Answer Formatting**:
     - MUST begin with "The answer is: "
     - For numerical answers: "The answer is: [number]"
-    - For concise textual answers (e.g., MAX/MIN of text fields): "The answer is: [text]"
+    - For numerical answers, please use base units (e.g., '元'). If the answer is a percentage, convert it to a decimal (e.g., 25%% should be 0.25).
     - Avoid explanations or justifications in the answer field.
 
 Example:
@@ -220,7 +220,7 @@ Generation Requirements (Medium Level):
 6.  **Answer Formatting**:
     - MUST begin with "The answer is: "
     - For numerical answers: "The answer is: [number]"
-    - For concise textual answers: "The answer is: [text]"
+    - For numerical answers, please use base units (e.g., '元'). If the answer is a percentage, convert it to a decimal (e.g., 25%% should be 0.25).
     - Avoid explanations or justifications in the answer field.
 
 Example:
@@ -267,7 +267,7 @@ Generation Requirements (Hard Level):
 7.  **Answer Formatting**:
     - MUST begin with "The answer is: "
     - For numerical answers: "The answer is: [number]"
-    - For concise textual answers: "The answer is: [text]"
+    - For numerical answers, please use base units (e.g., '元'). If the answer is a percentage, convert it to a decimal (e.g., 25%% should be 0.25).
     - Avoid explanations or justifications in the answer field.
 
 Example:
@@ -300,7 +300,7 @@ You are an advanced AI assistant specializing in generating precise SQL queries 
     * **Crucial for Column Names:** If a column name contains **special characters** (e.g., `[`, `]`, ` ` (space), `-`), or if it's a **reserved keyword** in SQL, you **MUST** enclose it in **double quotes** (e.g., `"Column Name With Spaces"`, `"资金流向[20231201]"`). This applies to all clauses (SELECT, FROM, WHERE, etc.).
     * Prioritize queries that return the most concise and direct answer.
     * Use appropriate SQL clauses (e.g., `SELECT`, `FROM`, `WHERE`, `JOIN`, `GROUP BY`, `ORDER BY`, `WITH`, `HAVING`, aggregate functions) as needed.
-
+    * **SQLite Compatibility Note (CRITICAL):** You are generating SQL for **SQLite3**, and ensure all mathematical and logical expressions are correctly parenthesized to avoid syntax errors.
 4.  **Specifics for Answer SQL Query (`SQL_ANSWER`):**
     * This query should directly yield the answer to the user's question.
 
