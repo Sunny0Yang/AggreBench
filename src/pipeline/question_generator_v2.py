@@ -50,22 +50,6 @@ class QuestionGenerator(QuestionGeneratorV1):
                     )
                     selected_sessions = random.sample(conversation.sessions, session_count)
                     selected_sessions.sort(key=lambda s: self._extract_session_number(s.id))
-                    # 构建会话上下文
-                    # TODO
-                    # if self.difficulty == "hard":
-                    #     # 可以在这里引入额外的“无关”会话，或者从整个对话中选择更多分散的会话
-                    #     # 比如，除了 selected_sessions 外，再随机选择一些非重叠的 sessions 作为干扰
-                    #     num_irrelevant_sessions = random.randint(1, 3) # 随机加入1-3个不相关的会话作为干扰
-                    #     all_available_sessions = [s for s in conversation.sessions if s not in selected_sessions]
-                    #     irrelevant_sessions = random.sample(all_available_sessions, min(num_irrelevant_sessions, len(all_available_sessions)))
-                        
-                    #     # 将不相关会话随机插入到选定会话中，模拟噪音
-                    #     combined_sessions = selected_sessions + irrelevant_sessions
-                    #     random.shuffle(combined_sessions) # 打乱顺序，使相关信息更难提取
-                    #     session_context = self._build_session_context(combined_sessions)
-                    # else:
-                    #     session_context = self._build_session_context(selected_sessions)
-                    
                     # 第一阶段：使用LLM生成初始QA对
                     session_context = self._build_session_context(selected_sessions)
                     

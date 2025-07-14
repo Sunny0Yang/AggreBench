@@ -26,7 +26,7 @@ class QuestionGenerator:
         self.min_evidences = min_evidences
         self.max_evidences = max_evidences
         self.logger = logging.getLogger(__name__)
-        self.difficulty = "easy" # 初始化一个默认值，实际会在 batch_generate 中动态设置
+        self.difficulty: DifficultyLevel = "easy" # Initialize with a default, will be set dynamically
 
     def batch_generate(self, dataset: ConversationDataset, difficulty_counts: Dict[DifficultyLevel, int]) -> List[Dict]:
         """为数据集生成多个QA对（每个对话生成固定数量QA）"""
@@ -35,17 +35,13 @@ class QuestionGenerator:
         for conversation in dataset.conversations:
             for difficulty, num_qa_for_difficulty in difficulty_counts.items():
                 if num_qa_for_difficulty == 0:
-                    self.logger.debug(f" '{difficulty}' 难度的问题数量为0，跳过生成。")
-                    continue
-                if len(conversation.sessions) < self.min_sessions:
-                    self.logger.warning(f"对话 {conversation.id} 会话数不足 ({len(conversation.sessions)} < {self.min_sessions})，跳过此对话。")
+                    self.logger.debug(f"Skipping generation for '{difficulty}' difficulty as count is 0.")
                     continue
 
                 self.logger.info(f"开始为{conversation.id} 生成 {num_qa_for_difficulty} 个 '{difficulty}' 难度的问题...")
                 self.difficulty = difficulty
 
                 generated_count_for_current_difficulty = 0
-                
                 while generated_count_for_current_difficulty < num_qa_for_difficulty:
                     session_count = random.randint(
                         self.min_sessions,
@@ -53,33 +49,18 @@ class QuestionGenerator:
                     )
                     selected_sessions = random.sample(conversation.sessions, session_count)
                     selected_sessions.sort(key=lambda s: self._extract_session_number(s.id))
-                    # 构建会话上下文
-                    # TODO
-                    # if self.difficulty == "hard":
-                    #     # 可以在这里引入额外的“无关”会话，或者从整个对话中选择更多分散的会话
-                    #     # 比如，除了 selected_sessions 外，再随机选择一些非重叠的 sessions 作为干扰
-                    #     num_irrelevant_sessions = random.randint(1, 3) # 随机加入1-3个不相关的会话作为干扰
-                    #     all_available_sessions = [s for s in conversation.sessions if s not in selected_sessions]
-                    #     irrelevant_sessions = random.sample(all_available_sessions, min(num_irrelevant_sessions, len(all_available_sessions)))
-                        
-                    #     # 将不相关会话随机插入到选定会话中，模拟噪音
-                    #     combined_sessions = selected_sessions + irrelevant_sessions
-                    #     random.shuffle(combined_sessions) # 打乱顺序，使相关信息更难提取
-                    #     session_context = self._build_session_context(combined_sessions)
-                    # else:
-                    #     session_context = self._build_session_context(selected_sessions)
                     session_context = self._build_session_context(selected_sessions)
                     
                     qa_response = self.generate_qa(session_context)
                     
                     if qa_response:
                         qa_dict = self._parse_response(qa_response)
-                        if qa_dict: # 确保解析成功
+                        if qa_dict:
                             qa_dict["conversation_id"] = conversation.id
                             qa_dict["session_ids"] = [s.id for s in selected_sessions]
                             qa_dict["qa_index"] = global_qa_idx
                             qa_dict["participants"] = conversation.speakers
-                            qa_dict["difficulty"] = self.difficulty # 添加难度信息
+                            qa_dict["difficulty"] = self.difficulty
                             all_qa.append(qa_dict)
                             generated_count_for_current_difficulty += 1
                             global_qa_idx += 1
@@ -88,14 +69,12 @@ class QuestionGenerator:
         return all_qa
 
     def _extract_session_number(self, session_id: str) -> int:
-        """
-        从会话ID中提取数字部分
-        """
+        """从会话ID中提取数字部分"""
         parts = session_id.split('_')
         for part in reversed(parts):
             if part.isdigit():
                 return int(part)
-        self.logger.error(f"无法从session_id提取数字: {session_id}")
+        self.logger.error(f"Could not extract numeric part from session_id: {session_id}")
         return hash(session_id)
 
     def _build_session_context(self, sessions: List[Session]) -> str:
@@ -111,9 +90,9 @@ class QuestionGenerator:
                     context += f"Table {idx}:\n"
                     for row_idx, row in enumerate(table.rows):
                         identifier = row.get("股票简称") or row.get("股票代码") or f"Row {row_idx}"
-                        context += f"   Entity: {identifier}\n"
+                        context += f"  Entity: {identifier}\n"
                         for k, v in row.items():
-                            context += f"     {k}: {v}\n"
+                            context += f"    {k}: {v}\n"
             else:
                 self.logger.info(f"会话 {session.id} 构建对话上下文")
                 context += f"Time: {session.time}\n"
@@ -156,7 +135,7 @@ class QuestionGenerator:
             model=self.model,
             messages=messages,
             stream=True,
-            extra_body={"enable_thinking": True}  # 设置为False避免开源版报错
+            extra_body={"enable_thinking": True}
         )
 
         response_content = ""
@@ -182,7 +161,7 @@ class QuestionGenerator:
             elif isinstance(temp.get("evidence"), str):
                 temp["evidence"] = [temp["evidence"].strip()]
             else:
-                temp["evidence"] = ["未知证据"]
+                temp["evidence"] = ["Unknown evidence"]
 
             return temp
         except json.JSONDecodeError:
@@ -246,6 +225,15 @@ def save_results(results: List[Dict], output_path: str):
         raise Exception(f"保存结果到 {output_path} 时出错: {e}") from e
 
 def main():
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    os.environ['LOG_FILE'] = f"qa_gen_v1_{timestamp}.log"
+    logger = setup_logging()
+    
+    base_parser = get_base_parser()
+    parser = argparse.ArgumentParser(parents=[base_parser])
+    parser = qa_generation_args(parser)
+    args = parser.parse_args()
+    
     logger.info(f"Starting QA generation V1 for: {args.input_data}")
     
     # 从命令行参数获取难度计数
@@ -255,12 +243,11 @@ def main():
         "hard": args.hard
     }
 
-    # 如果所有难度计数都为0，则设置一个默认值，例如生成10个简单问题
+    # 如果所有难度计数都为0
     if all(count == 0 for count in difficulty_counts.values()):
-        logger.warning("未指定任何难度的问题数量")
+        logger.warning("No difficulty level specified. Please use --easy, --medium, or --hard to specify the number of questions.")
         exit(0)
 
-    # 初始化生成器
     qa_generator = QuestionGenerator(
         model=args.model,
         min_sessions=args.min_sessions,
@@ -281,20 +268,11 @@ def main():
     # 保存结果
     os.makedirs(args.output_dir, exist_ok=True)
     temp = (os.path.splitext(os.path.basename(args.input_data))[0]).split("_")[0]
-    filename = f"{temp}_qa.json"
+    filename = f"{temp}_qa_v1.json"
     output_path = os.path.join(args.output_dir, filename)
     save_results(results, output_path)
     
-    logger.info(f"QA generation complete. Output to: {args.output_dir}")
+    logger.info(f"QA generation V1 complete. Output to: {output_path}")
 
 if __name__ == "__main__":
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    os.environ['LOG_FILE'] = f"qa_gen_{timestamp}.log"
-    logger = setup_logging()
-    
-    base_parser = get_base_parser()
-    parser = argparse.ArgumentParser(parents=[base_parser])
-    parser = qa_generation_args(parser)
-    args = parser.parse_args()
-    
     main()
