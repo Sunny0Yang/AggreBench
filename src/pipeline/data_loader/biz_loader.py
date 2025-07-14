@@ -109,7 +109,7 @@ class BizFinLoader:
             )
             table_objects.append(table)
         
-        # 为每个表格创建一个session
+        # 为每个sample（几张表）创建一个session
         turns = []
         if self.generate_pseudo_dialogue:
             conv_id = conversation_id.split('_')[-1]
