@@ -49,24 +49,31 @@ class QuestionGenerator:
                     )
                     selected_sessions = random.sample(conversation.sessions, session_count)
                     selected_sessions.sort(key=lambda s: self._extract_session_number(s.id))
-                    session_context = self._build_session_context(selected_sessions)
-                    
-                    qa_response = self.generate_qa(session_context)
-                    
-                    if qa_response:
-                        qa_dict = self._parse_response(qa_response)
-                        if qa_dict:
-                            qa_dict["conversation_id"] = conversation.id
-                            qa_dict["session_ids"] = [s.id for s in selected_sessions]
-                            qa_dict["qa_index"] = global_qa_idx
-                            qa_dict["participants"] = conversation.speakers
-                            qa_dict["difficulty"] = self.difficulty
-                            all_qa.append(qa_dict)
-                            generated_count_for_current_difficulty += 1
-                            global_qa_idx += 1
-                            self.logger.info(f"生成了第 {generated_count_for_current_difficulty}/{num_qa_for_difficulty} 个 '{self.difficulty}' 难度QA")
-                    
+
+                    qa_dict = self._generate_single_qa(conversation, selected_sessions, global_qa_idx)
+                    if qa_dict:
+                        all_qa.append(qa_dict)
+                        generated_count_for_current_difficulty += 1
+                        global_qa_idx += 1
+                        self.logger.info(f"生成了第 {generated_count_for_current_difficulty}/{num_qa_for_difficulty} 个 '{self.difficulty}' 难度QA")
+                    else:
+                        self.logger.error(f"生成第 {generated_count_for_current_difficulty}/{num_qa_for_difficulty} 个 '{self.difficulty}' 难度QA失败，尝试下一个会话组合")
         return all_qa
+
+    def _generate_single_qa(self, conversation, selected_sessions, global_qa_idx) -> Dict:
+        session_context = self._build_session_context(selected_sessions)
+        qa_response = self.generate_qa(session_context)
+        if not qa_response:
+            return None
+        qa_dict = self._parse_response(qa_response)
+        if not qa_dict:
+            return None
+        qa_dict["conversation_id"] = conversation.id
+        qa_dict["session_ids"] = [s.id for s in selected_sessions]
+        qa_dict["qa_index"] = global_qa_idx
+        qa_dict["participants"] = conversation.speakers
+        qa_dict["difficulty"] = self.difficulty
+        return qa_dict
 
     def _extract_session_number(self, session_id: str) -> int:
         """从会话ID中提取数字部分"""

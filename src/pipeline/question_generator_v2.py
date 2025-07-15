@@ -51,20 +51,13 @@ class QuestionGenerator(QuestionGeneratorV1):
                     selected_sessions = random.sample(conversation.sessions, session_count)
                     selected_sessions.sort(key=lambda s: self._extract_session_number(s.id))
                     # 第一阶段：使用LLM生成初始QA对
-                    session_context = self._build_session_context(selected_sessions)
-                    
-                    qa_response = self.generate_qa(session_context)
-                    if not qa_response:
-                        self.logger.warning(f"为对话 {conversation.id} 生成QA {global_qa_idx}失败")
-                        continue
-                    
-                    qa_dict = self._parse_response(qa_response)
+                    qa_dict = self._generate_single_qa(conversation, selected_sessions, global_qa_idx)
 
                     question = qa_dict.get("question")
                     answer_llm = qa_dict.get("answer")
                     evidence_llm = qa_dict.get("evidence")
                     
-                    self.logger.info(f"初始QA生成成功 - 问题: {question[:50]}...") # 打印部分问题以避免过长
+                    self.logger.info(f"初始QA生成成功 - 问题: {question[:50]}...")
                     self.logger.debug(f"Question: {question}")
                     self.logger.debug(f"Answer LLM: {answer_llm}")
                     self.logger.debug(f"Evidence LLM: {evidence_llm}")
@@ -76,13 +69,6 @@ class QuestionGenerator(QuestionGeneratorV1):
                         evidence_llm=evidence_llm,
                         sessions=selected_sessions
                     )
-                    
-                    # 添加元信息
-                    qa_dict["conversation_id"] = conversation.id
-                    qa_dict["session_ids"] = [s.id for s in selected_sessions]
-                    qa_dict["qa_index"] = global_qa_idx
-                    qa_dict["participants"] = conversation.speakers
-                    qa_dict["difficulty"] = self.difficulty
 
                     all_qa.append(qa_dict)
                     generated_count_for_current_difficulty += 1
