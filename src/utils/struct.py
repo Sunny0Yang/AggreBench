@@ -64,3 +64,61 @@ class Conversation:
 class ConversationDataset:
     def __init__(self, conversations):
         self.conversations = conversations  # Conversation对象列表
+
+def load_data(input_path: str) -> ConversationDataset:
+    """加载并转换数据为ConversationDataset对象"""
+    import json
+    try:
+        with open(input_path, 'r', encoding='utf-8') as f:
+            raw_data = json.load(f)
+        
+        conversations = []
+        for conv_data in raw_data:
+            sessions = []
+            for session_data in conv_data.get("sessions", []):
+                turns = []
+                for turn_data in session_data.get("turns", []):
+                    turn = MultiModalTurn(
+                        turn_id=turn_data.get("turn_id", f"turn_{len(turns)+1}"),
+                        speaker=turn_data.get("speaker", "Unknown"),
+                        content=turn_data.get("content", "")
+                    )
+                    turns.append(turn)
+                
+                tables = []
+                for table_data in session_data.get("tables", []):
+                    headers = table_data.get("headers", [])
+                    rows = table_data.get("rows", [])
+                    table = Table(headers=headers, rows=rows)
+                    tables.append(table)
+
+                session = Session(
+                    session_id=session_data.get("session_id", f"session_{len(sessions)+1}"),
+                    time=session_data.get("time", "Unknown"),
+                    participants=session_data.get("participants", ["Participant A", "Participant B"]),
+                    turns=turns,
+                    type=session_data.get("type", "conversation"),
+                    tables=tables
+                )
+                sessions.append(session)
+            
+            conversation = Conversation(
+                conversation_id=conv_data.get("conversation_id", f"conv_{len(conversations)+1}"),
+                speakers=conv_data.get("speakers", ["Speaker A", "Speaker B"]),
+                sessions=sessions
+            )
+            conversations.append(conversation)
+        
+        return ConversationDataset(conversations=conversations)
+    except Exception as e:
+        raise RuntimeError(f"数据加载错误: {str(e)}")
+        
+def save_results(results: List[Dict], output_path: str):
+    """保存生成的QA对结果"""
+    import json
+    try:
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
+        print(f"成功保存 {len(results)} 条QA对至: {output_path}")
+    except Exception as e:
+        raise Exception(f"保存结果到 {output_path} 时出错: {e}") from e
