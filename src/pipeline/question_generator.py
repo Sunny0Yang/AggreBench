@@ -123,7 +123,7 @@ class QuestionGenerator:
             print("\n--- Step-by-step mode: New QA Generated. ---")
             print(f"Question: {qa_dict.get('question_text')}")
             print(f"\n请检查这次生成的问题。输入 'y' 标记为【偏好问题】（保存进数据集）；输入 'n' 标记为【不喜欢】（保存进cache），并重新生成；输入 'r' 重新生成（不保存进cache）；按回车键标记为【已生成】（保存进数据集）。")
-            char = input("输入 'y', 'n' 或回车键继续...").strip().lower() # Read and standardize user input
+            char = input("输入 'y', 'n', 'r'或回车键继续...\n").strip().lower() # Read and standardize user input
             
             if char == "y":
                 self.cache_manager.add_qa(qa_dict, status="liked")
@@ -344,7 +344,6 @@ def main():
         dataset = load_data(args.input_data)
         logger.info(f"数据集包含 {len(dataset.conversations)} 个对话")
         
-        # 生成QA对。现在batch_generate不返回任何值，而是直接操作缓存。
         qa_generator.batch_generate(dataset, difficulty_counts) 
         
         # 从缓存中获取所有可导出的QA对
