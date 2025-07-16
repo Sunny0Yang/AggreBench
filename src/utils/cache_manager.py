@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import hashlib
 import logging
 from abc import ABC, abstractmethod
@@ -9,10 +10,11 @@ from pathlib import Path
 # Common Difficulty Level type
 DifficultyLevel = Literal["easy", "medium", "hard"]
 
-class BaseCacheManager:
+
+class BaseCacheManager(ABC):
     """
     基类缓存管理器，提供通用的缓存加载、保存和路径管理功能
-    子类应实现 specific_hash_key 方法来定义其独特的缓存键生成逻辑
+    子类应实现 _generate_cache_key 方法来定义其独特的缓存键生成逻辑
     """
     def __init__(self, cache_dir: str):
         self.cache_dir = Path(cache_dir)
@@ -78,56 +80,145 @@ class BaseCacheManager:
 class QACacheManager(BaseCacheManager):
     """
     QA 生成的缓存管理器
-    缓存包含偏好 QA (preferred_qas) 和已生成 QA (generated_qas)
-    缓存键基于排序后的 session_ids 和 difficulty
+    缓存包含统一的 QA 列表，每个 QA 包含状态标签 (status: "liked", "generated", "disliked")
+    使用单一全局缓存文件来存储所有生成的QA，实现断点恢复和偏好管理。
     """
     def __init__(self, cache_dir: str = "./qa_generation_cache"):
         super().__init__(cache_dir)
         self.logger = logging.getLogger(self.__class__.__name__)
-
-    def _generate_cache_key(self, session_ids: List[str], difficulty: DifficultyLevel) -> str:
-        """
-        根据会话ID和难度生成唯一的缓存键
-        会话ID列表应保持排序，以确保一致的哈希值
-        """
-        sorted_session_ids = sorted(session_ids)
-        unique_string = f"{'_'.join(sorted_session_ids)}_{difficulty}"
-        return hashlib.md5(unique_string.encode('utf-8')).hexdigest()
+        self.load_cache()
+        
+    def _generate_cache_key(self, *args, **kwargs) -> str:
+        return "qa_cache"
 
     def _initialize_empty_cache_data(self) -> Dict:
         return {
-            "preferred_qas": [],
-            "generated_qas": []
+            "questions": []
         }
 
-    def add_generated_qa(self, qa_pair: Dict):
-        """添加一个已生成的QA对到缓存中"""
-        question_text = qa_pair.get("question", "")
-        if not any(q.get("question") == question_text for q in self.cache_data["generated_qas"]):
-            self.cache_data["generated_qas"].append(qa_pair)
-            self.logger.debug(f"Added new QA to cache: {question_text[:30]}...")
+    def generate_qa_id(self, qa_pair: Dict) -> str:
+        """Generates a unique ID for a QA pair based on its content."""
+        qa_content_string = f"{qa_pair.get('question_text', '')}"
+        return hashlib.md5(qa_content_string.encode('utf-8')).hexdigest()
+
+    def add_qa(self, qa_pair: Dict, status: str = "generated") -> bool:
+        """
+        添加或更新一个QA对到缓存中。
+        如果QA对已存在（通过qa_id判断），则更新其信息（特别是status）。
+        否则，添加新的QA对。
+        优先保留 'liked' 或 'disliked' 状态，不被 'generated' 覆盖。
+        """
+        qa_id = qa_pair.get("qa_id")
+        if not qa_id:
+            qa_id = self.generate_qa_id(qa_pair)
+            qa_pair["qa_id"] = qa_id
+
+        existing_qa_index = -1
+        for i, q in enumerate(self.cache_data["questions"]):
+            if q.get("qa_id") == qa_id:
+                existing_qa_index = i
+                break
+
+        qa_data_to_store = {
+            "qa_id": qa_id,
+            "question_text": qa_pair.get("question_text"),
+            "answer_text": qa_pair.get("answer_text"),
+            "evidence": qa_pair.get("evidence"),
+            "difficulty": qa_pair.get("difficulty"),
+            "conversation_id": qa_pair.get("conversation_id"),
+            "session_ids": qa_pair.get("session_ids"),
+            "timestamp": qa_pair.get("timestamp", time.strftime("%Y-%m-%dT%H:%M:%S")),
+            "status": status
+        }
+
+        if existing_qa_index != -1:
+            # Check existing status priority
+            current_status = self.cache_data["questions"][existing_qa_index].get("status")
+            if (current_status == "liked" and status != "liked") or \
+               (current_status == "disliked" and status not in ["liked", "disliked"]):
+                self.logger.debug(f"Skipped updating QA {qa_id}: new status '{status}' is lower priority than existing '{current_status}'")
+                return False # Don't overwrite higher priority status
+            
+            # Update existing QA
+            self.cache_data["questions"][existing_qa_index].update(qa_data_to_store)
+            self.logger.debug(f"Updated existing QA in cache: {qa_id} (status: {status})")
+            return False # Not a new addition
         else:
-            self.logger.debug(f"Skipped adding duplicate QA to cache: {question_text[:30]}...")
+            self.cache_data["questions"].append(qa_data_to_store)
+            self.logger.debug(f"Added new QA to cache: {qa_id} (status: {status})")
+            return True # A new addition
 
-    def get_preferred_qas(self) -> List[Dict]:
-        """获取偏好QA列表"""
-        return self.cache_data.get("preferred_qas", [])
+    def get_preferred_qas(self, difficulty: DifficultyLevel = None) -> List[Dict]:
+        """获取所有被标记为“liked”的QA列表，可按难度过滤。"""
+        preferred_qas = [qa for qa in self.cache_data.get("questions", []) if qa.get("status") == "liked"]
+        if difficulty:
+            return [qa for qa in preferred_qas if qa.get("difficulty") == difficulty]
+        return preferred_qas
+    
+    def get_disliked_qas(self, difficulty: DifficultyLevel = None) -> List[Dict]:
+        """获取所有被标记为“disliked”的QA列表，可按难度过滤。"""
+        disliked_qas = [qa for qa in self.cache_data.get("questions", []) if qa.get("status") == "disliked"]
+        if difficulty:
+            return [qa for qa in disliked_qas if qa.get("difficulty") == difficulty]
+        return disliked_qas
 
-    def get_generated_qas_count(self) -> int:
-        """获取已生成QA的数量"""
-        return len(self.cache_data.get("generated_qas", []))
+    def get_all_questions_text(self, difficulty: DifficultyLevel = None) -> List[str]:
+        """
+        获取缓存中所有QA的question_text列表，可按难度过滤。
+        用于去重和确保新问题具有辨识度。
+        """
+        all_qas = self.cache_data.get("questions", [])
+        if difficulty:
+            q_texts = [qa.get("question_text", "") for qa in all_qas if qa.get("difficulty") == difficulty]
+        else:
+            q_texts = [qa.get("question_text", "") for qa in all_qas]
+        return [q for q in q_texts if q]
 
-    def get_generated_questions(self) -> List[str]:
-        """获取所有已生成的问题文本列表，用于去重"""
-        return [qa.get("question", "") for qa in self.cache_data.get("generated_qas", []) if qa.get("question")]
+    def get_all_qas(self, difficulty: DifficultyLevel = None) -> List[Dict]:
+        """
+        获取缓存中所有QA列表，可按难度过滤。
+        返回完整的QA字典对象。
+        """
+        all_qas = self.cache_data.get("questions", [])
+        if difficulty:
+            return [qa for qa in all_qas if qa.get("difficulty") == difficulty]
+        return all_qas
+        
+    def get_exportable_qas(self) -> List[Dict]:
+        """
+        获取所有应导出到最终数据集的QA列表 (status为'liked'或'generated')。
+        """
+        exportable_qas = [qa for qa in self.cache_data.get("questions", []) if qa.get("status") in ["liked", "generated"]]
+        return sorted(exportable_qas, key=lambda x: x.get("difficulty", "easy"))
 
-    def add_preferred_qa(self, qa_pair: Dict):
-        """手动添加一个偏好QA到缓存中"""
-        question_text = qa_pair.get("question", "")
-        if not any(q.get("question") == question_text for q in self.cache_data["preferred_qas"]):
-            self.cache_data["preferred_qas"].append(qa_pair)
-            self.logger.info(f"Manually added preferred QA: {question_text[:30]}...")
-            self.save_cache()
+    def get_qa_by_id(self, qa_id: str) -> Dict | None:
+        """根据QA ID获取特定的QA对"""
+        for qa in self.cache_data.get("questions", []):
+            if qa.get("qa_id") == qa_id:
+                return qa
+        return None
+    
+    def save_cache(self):
+        """
+        保存当前缓存数据到文件，并在保存前对所有问题按 difficulty 排序：
+        """
+        if not self.current_cache_path:
+            self.logger.warning("No current cache path set. Cannot save cache.")
+            return
+
+        difficulty_rank = {"hard": 2, "medium": 1, "easy": 0}
+        try:
+            self.cache_data["questions"].sort(
+                key=lambda q: (
+                    difficulty_rank.get(q.get("difficulty", "easy"), 3),
+                    q.get("timestamp", "")
+                )
+            )
+            with open(self.current_cache_path, 'w', encoding='utf-8') as f:
+                json.dump(self.cache_data, f, indent=2, ensure_ascii=False)
+            self.logger.info(f"Cache (sorted by difficulty) saved to {self.current_cache_path}")
+        except Exception as e:
+            self.logger.error(f"Failed to save cache to {self.current_cache_path}: {e}")
 
 class DialogCacheManager(BaseCacheManager):
     """

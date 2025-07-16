@@ -1,24 +1,27 @@
-import argparse
-import logging
-import random
-import time
 import os
 import re
 import json
-from typing import Any, List, Dict, Literal
+import time
+import random
+import logging
+import argparse
+from typing import Any, List, Dict, Literal, Tuple
+
 from utils.params import get_base_parser, qa_generation_args
 from utils.logger import setup_logging
 from utils.prompt_templates import QA_GENERATION_PROMPTS
 from client.llm_client import client
-from utils.struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset
-
-DifficultyLevel = Literal["easy", "medium", "hard"]
+from utils.struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset, load_data, save_results
+from utils.cache_manager import QACacheManager, DifficultyLevel # Import DifficultyLevel from cache_manager
 
 class QuestionGenerator:
     def __init__(self, model: str,
                  min_sessions=5, max_sessions=10,
                  session_threshold=2,
-                 min_evidences=10, max_evidences=15):
+                 min_evidences=10, max_evidences=15,
+                 cache_dir: str = "./qa_generation_cache", is_step=False,
+                 max_preferred_examples: int = 3,
+                 max_disliked_examples: int = 3):
         self.model = model
         self.min_sessions = min_sessions
         self.max_sessions = max_sessions
@@ -26,63 +29,126 @@ class QuestionGenerator:
         self.min_evidences = min_evidences
         self.max_evidences = max_evidences
         self.logger = logging.getLogger(__name__)
-        self.difficulty: DifficultyLevel = "easy" # Initialize with a default, will be set dynamically
+        self.difficulty: DifficultyLevel = "easy"
+        self.cache_manager = QACacheManager(cache_dir)
+        self.is_step = is_step
+        self.max_preferred_examples = max_preferred_examples
+        self.max_disliked_examples = max_disliked_examples
 
-    def batch_generate(self, dataset: ConversationDataset, difficulty_counts: Dict[DifficultyLevel, int]) -> List[Dict]:
-        """为数据集生成多个QA对（每个对话生成固定数量QA）"""
-        all_qa = []
-        global_qa_idx = 0
+    def batch_generate(self, dataset: ConversationDataset, difficulty_counts: Dict[DifficultyLevel, int]):
+        """
+        为数据集生成多个QA对（每个对话生成固定数量QA）。
+        所有生成的QA都将直接管理在QACacheManager中。
+        """
+        if self.is_step:
+            print("\n--- Step-by-step mode: QA Generation Preview. ---")
+            print(f"\n您可以检查缓存文件 {self.cache_manager.current_cache_path} ，然后按回车键继续...")
+            input("Press Enter to continue...")
+            self.cache_manager.load_cache()
+        # global_qa_idx should represent the count of currently 'exportable' (liked/generated) QAs
+        # across the *entire* cache, for correct sequential indexing in the final output.
+        global_qa_idx = len(self.cache_manager.get_exportable_qas())
+        self.logger.info(f"Loaded {len(self.cache_manager.get_all_qas())} QAs from cache. Starting global QA index from {global_qa_idx}.")
+
         for conversation in dataset.conversations:
             for difficulty, num_qa_for_difficulty in difficulty_counts.items():
                 if num_qa_for_difficulty == 0:
                     self.logger.debug(f"Skipping generation for '{difficulty}' difficulty as count is 0.")
                     continue
 
-                self.logger.info(f"开始为{conversation.id} 生成 {num_qa_for_difficulty} 个 '{difficulty}' 难度的问题...")
+                self.logger.info(f"开始为对话 '{conversation.id}' 生成 {num_qa_for_difficulty} 个 '{difficulty}' 难度的问题...")
                 self.difficulty = difficulty
 
-                generated_count_for_current_difficulty = 0
+                # 从cache恢复已生成的个数 F(conversation,difficulty,status)
+                generated_count_for_current_difficulty = len(
+                    [qa for qa in self.cache_manager.get_all_qas(difficulty=difficulty) 
+                     if qa.get("conversation_id") == conversation.id and qa.get("status") in ["liked", "generated"]]
+                )
+                if generated_count_for_current_difficulty >= num_qa_for_difficulty:
+                    self.logger.info(f"Skipping generation for '{difficulty}' difficulty as already generated {generated_count_for_current_difficulty}/{num_qa_for_difficulty} QAs.")
+                    continue
                 while generated_count_for_current_difficulty < num_qa_for_difficulty:
-                    session_count = random.randint(
-                        self.min_sessions,
-                        min(self.max_sessions, len(conversation.sessions))
-                    )
-                    selected_sessions = random.sample(conversation.sessions, session_count)
-                    selected_sessions.sort(key=lambda s: self._extract_session_number(s.id))
-
-                    qa_dict = self._generate_single_qa(conversation, selected_sessions, global_qa_idx)
+                    qa_dict, _ = self._generate_single_qa(conversation, global_qa_idx)
                     if qa_dict:
-                        all_qa.append(qa_dict)
                         generated_count_for_current_difficulty += 1
                         global_qa_idx += 1
-                        self.logger.info(f"生成了第 {generated_count_for_current_difficulty}/{num_qa_for_difficulty} 个 '{self.difficulty}' 难度QA")
+                        self.logger.info(f"成功生成了第 {generated_count_for_current_difficulty}/{num_qa_for_difficulty} 个 '{self.difficulty}' 难度QA")
                     else:
-                        self.logger.error(f"生成第 {generated_count_for_current_difficulty}/{num_qa_for_difficulty} 个 '{self.difficulty}' 难度QA失败，尝试下一个会话组合")
-        return all_qa
-
-    def _generate_single_qa(self, conversation, selected_sessions, global_qa_idx) -> Dict:
+                        self.logger.info(f"重新生成第{generated_count_for_current_difficulty}/{num_qa_for_difficulty} 个 '{self.difficulty}' 难度QA")
+    
+    def _generate_single_qa(self, conversation: Conversation, global_qa_idx: int) -> Tuple[Dict | None, List[Session]]:
+        """
+        生成单个QA对，并处理缓存逻辑和用户交互。
+        返回生成的QA字典和所选会话列表，如果生成失败或用户拒绝则返回 (None, None)。
+        """
+        # 从conversation中随机选择会话
+        session_count = random.randint(
+            self.min_sessions,
+            min(self.max_sessions, len(conversation.sessions))
+        )
+        selected_sessions = random.sample(conversation.sessions, session_count)
+        selected_sessions.sort(key=lambda s: s.id)
+        # Prepare context for LLM
         session_context = self._build_session_context(selected_sessions)
-        qa_response = self.generate_qa(session_context)
+        
+        # Get guidance QAs
+        # positive examples (status="liked")
+        preferred_qas = self.cache_manager.get_preferred_qas(self.difficulty)
+        # negative examples (status="disliked")
+        disliked_qas = self.cache_manager.get_disliked_qas(self.difficulty)
+
+        additional_guidance = self._build_additional_guidance(
+            preferred_qas=preferred_qas, 
+            disliked_qas=disliked_qas
+        )
+
+        qa_response = self.generate_qa(session_context, additional_guidance)
         if not qa_response:
-            return None
+            self.logger.warning("LLM did not return a valid response.")
+            return None, None
+        
         qa_dict = self._parse_response(qa_response)
         if not qa_dict:
-            return None
+            self.logger.warning("Failed to parse LLM response into a QA dictionary.")
+            return None, None
+        
+        # Add conversation-specific and global metadata
         qa_dict["conversation_id"] = conversation.id
         qa_dict["session_ids"] = [s.id for s in selected_sessions]
-        qa_dict["qa_index"] = global_qa_idx
-        qa_dict["participants"] = conversation.speakers
         qa_dict["difficulty"] = self.difficulty
-        return qa_dict
+        qa_dict["qa_id"] = self.cache_manager.generate_qa_id(qa_dict)
+        qa_dict["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
 
-    def _extract_session_number(self, session_id: str) -> int:
-        """从会话ID中提取数字部分"""
-        parts = session_id.split('_')
-        for part in reversed(parts):
-            if part.isdigit():
-                return int(part)
-        self.logger.error(f"Could not extract numeric part from session_id: {session_id}")
-        return hash(session_id)
+        if self.is_step:
+            print("\n--- Step-by-step mode: New QA Generated. ---")
+            print(f"Question: {qa_dict.get('question_text')}")
+            print(f"\n请检查这次生成的问题。输入 'y' 标记为【偏好问题】（保存进数据集）；输入 'n' 标记为【不喜欢】（保存进cache），并重新生成；输入 'r' 重新生成（不保存进cache）；按回车键标记为【已生成】（保存进数据集）。")
+            char = input("输入 'y', 'n' 或回车键继续...").strip().lower() # Read and standardize user input
+            
+            if char == "y":
+                self.cache_manager.add_qa(qa_dict, status="liked")
+                self.cache_manager.save_cache()
+                self.logger.info(f"QA {qa_dict['qa_id']} marked as 'liked'.")
+                return qa_dict, selected_sessions
+            elif char == "n":
+                self.cache_manager.add_qa(qa_dict, status="disliked")
+                self.cache_manager.save_cache()
+                self.logger.info(f"QA {qa_dict['qa_id']} marked as 'disliked'. Re-generating...")
+                return None, None # Signal to re-generate
+            elif char == "r":
+                self.logger.info(f"QA {qa_dict['qa_id']} marked as 'rejected'. Re-generating...")
+                return None, None # Signal to re-generate
+            else:
+                self.cache_manager.add_qa(qa_dict, status="generated")
+                self.cache_manager.save_cache()
+                self.logger.info(f"QA {qa_dict['qa_id']} marked as 'generated'.")
+                return qa_dict, selected_sessions
+        else:
+            # Not in step-by-step mode, automatically add as 'generated'
+            self.cache_manager.add_qa(qa_dict, status="generated")
+            self.cache_manager.save_cache()
+            self.logger.info(f"QA {qa_dict['qa_id']} added as 'generated'.")
+            return qa_dict, selected_sessions
 
     def _build_session_context(self, sessions: List[Session]) -> str:
         """构建会话上下文表示（支持结构化数据）"""
@@ -91,7 +157,7 @@ class QuestionGenerator:
             context += f"### Session ID: {session.id}\n"
             
             if session.tables:
-                self.logger.info(f"会话 {session.id} 构建表格上下文")
+                self.logger.debug(f"会话 {session.id} 构建表格上下文")
                 context += "Data Type: Structured Table\n"
                 for idx, table in enumerate(session.tables):
                     context += f"Table {idx}:\n"
@@ -101,7 +167,7 @@ class QuestionGenerator:
                         for k, v in row.items():
                             context += f"    {k}: {v}\n"
             else:
-                self.logger.info(f"会话 {session.id} 构建对话上下文")
+                self.logger.debug(f"会话 {session.id} 构建对话上下文")
                 context += f"Time: {session.time}\n"
                 context += f"Participants: {', '.join(session.participants)}\n"
                 context += "Dialogs:\n"
@@ -111,7 +177,60 @@ class QuestionGenerator:
             context += "\n"
         return context
 
-    def generate_qa(self, session_context: str) -> str:
+    def _build_additional_guidance(self, preferred_qas: List[Dict], disliked_qas: List[Dict]) -> str:
+        """
+        构建额外的指导信息，包含偏好问题、不偏好问题和所有已生成问题文本。
+        """
+        guidance = ""
+
+        # Section 1: Crucial Instructions (Prioritize Uniqueness and Diversity)
+        guidance += (
+            "### IMPORTANT GENERATION GUIDELINES:\n"
+            "Your primary goal is to generate a **NEW, UNIQUE, and SEMANTICALLY DISTINCT question** based on the provided context.\n"
+            "**DO NOT** merely rephrase or slightly alter any existing question. Strive for **stylistic and semantic diversity**.\n"
+            "Explore different facts, aspects, or aggregation types within the context to formulate truly novel questions.\n"
+            "The question must be answerable solely from the provided context.\n\n"
+        )
+
+        # Section 2: Preferred Questions (Positive Examples)
+        selected_preferred_qas = random.sample(preferred_qas, min(len(preferred_qas), self.max_preferred_examples))
+        if selected_preferred_qas:
+            guidance += (
+                "### Preferred Questions (High-quality examples):\n"
+                "These examples showcase the **desired characteristics** for new questions. "
+                "**Crucially, DO NOT replicate their exact phrasing or merely substitute entities.** "
+                "Instead, analyze them to understand the *underlying principles* of what makes them good:\n"
+                "- **Question Type:** Is it a comparison, aggregation, trend analysis, specific fact retrieval?\n"
+                "- **Logical Structure:** How does it connect different pieces of information?\n"
+                "- **Context Utilization:** Which specific facts or data points are combined or inferred?\n"
+                "- **Complexity:** How does it achieve the desired difficulty level?\n"
+                "Your task is to generate **semantically unique questions** that adhere to these principles, but are distinct in their wording and specific focus.\n"
+            )
+            for idx, qa in enumerate(selected_preferred_qas):
+                guidance += f"  Good Example {idx + 1}:\n"
+                guidance += f"    Question: {qa.get('question_text', 'N/A')}\n"
+                guidance += f"    Answer: {qa.get('answer_text', 'N/A')}\n"
+                guidance += f"    Evidence: {', '.join(qa.get('evidence', []))}\n"
+            guidance += "\n"
+
+        # Section 3: Disliked Questions (Negative Examples)
+        selected_disliked_qas = random.sample(disliked_qas, min(len(disliked_qas), self.max_disliked_examples))
+        if selected_disliked_qas:
+            guidance += (
+                "### Disliked Questions (Examples to AVOID generating):\n"
+                "These examples were deemed low-quality, irrelevant, or undesirable. "
+                "**Pay close attention to what makes them bad.** Is it due to ambiguity, lack of answerability, redundancy, or irrelevant details?\n"
+                "**Absolutely DO NOT generate questions that are semantically identical or very similar to these in form or content.** "
+                "Learn from their flaws to prevent similar mistakes in your new questions.\n"
+            )
+            for idx, qa in enumerate(selected_disliked_qas):
+                guidance += f"  Bad Example {idx + 1}:\n"
+                guidance += f"    Question: {qa.get('question_text', 'N/A')}\n"
+            guidance += "\n"
+            
+        return guidance
+
+    def generate_qa(self, session_context: str, additional_guidance: str) -> str:
         """生成单个QA对"""
         is_structured = "structured table" in session_context.lower()
         
@@ -132,7 +251,10 @@ class QuestionGenerator:
             min_evidences=self.min_evidences,
             max_evidences=self.max_evidences
         )
-        
+
+        if additional_guidance:
+            prompt += additional_guidance
+        self.logger.debug(f"Prompt for difficulty '{self.difficulty}': {prompt}")
         messages = [
             {"role": "system", "content": system_role},
             {"role": "user", "content": prompt},
@@ -156,12 +278,17 @@ class QuestionGenerator:
         """解析LLM响应为结构化字典"""
         try:
             temp = json.loads(response.strip())
-            if isinstance(temp.get("answer"), str):
-                match = re.search(r"^The answer is:\s*(-?[0-9]+(?:\.[0-9]+)?)", temp["answer"])
+            if "question" in temp:
+                temp["question_text"] = temp.pop("question")
+            if "answer" in temp:
+                temp["answer_text"] = temp.pop("answer")
+
+            if isinstance(temp.get("answer_text"), str):
+                match = re.search(r"^The answer is:\s*(-?[0-9]+(?:\.[0-9]+)?)", temp["answer_text"])
                 if match:
-                    temp["answer"] = float(match.group(1))
+                    temp["answer_text"] = float(match.group(1))
                 else:
-                    temp["answer"] = temp["answer"].replace("The answer is: ", "").strip()
+                    temp["answer_text"] = temp["answer_text"].replace("The answer is: ", "").strip()
             
             if isinstance(temp.get("evidence"), list):
                 temp["evidence"] = [str(e).strip() for e in temp["evidence"]]
@@ -171,115 +298,73 @@ class QuestionGenerator:
                 temp["evidence"] = ["Unknown evidence"]
 
             return temp
-        except json.JSONDecodeError:
-            self.logger.error("响应解析失败")
+        except Exception as e:
+            self.logger.error(f"解析响应时发生错误: {e}.")
             return None
 
-def load_data(input_path: str) -> ConversationDataset:
-    """加载并转换数据为ConversationDataset对象"""
-    try:
-        with open(input_path, 'r', encoding='utf-8') as f:
-            raw_data = json.load(f)
-        
-        conversations = []
-        for conv_data in raw_data:
-            sessions = []
-            for session_data in conv_data.get("sessions", []):
-                turns = []
-                for turn_data in session_data.get("turns", []):
-                    turn = MultiModalTurn(
-                        turn_id=turn_data.get("turn_id", f"turn_{len(turns)+1}"),
-                        speaker=turn_data.get("speaker", "Unknown"),
-                        content=turn_data.get("content", "")
-                    )
-                    turns.append(turn)
-                
-                tables = []
-                for table_data in session_data.get("tables", []):
-                    headers = table_data.get("headers", [])
-                    rows = table_data.get("rows", [])
-                    table = Table(headers=headers, rows=rows)
-                    tables.append(table)
-
-                session = Session(
-                    session_id=session_data.get("session_id", f"session_{len(sessions)+1}"),
-                    time=session_data.get("time", "Unknown"),
-                    participants=session_data.get("participants", ["Participant A", "Participant B"]),
-                    turns=turns,
-                    type=session_data.get("type", "conversation"),
-                    tables=tables
-                )
-                sessions.append(session)
-            
-            conversation = Conversation(
-                conversation_id=conv_data.get("conversation_id", f"conv_{len(conversations)+1}"),
-                speakers=conv_data.get("speakers", ["Speaker A", "Speaker B"]),
-                sessions=sessions
-            )
-            conversations.append(conversation)
-        
-        return ConversationDataset(conversations=conversations)
-    except Exception as e:
-        raise RuntimeError(f"数据加载错误: {str(e)}")
-        
-def save_results(results: List[Dict], output_path: str):
-    """保存生成的QA对结果"""
-    try:
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
-        print(f"成功保存 {len(results)} 条QA对至: {output_path}")
-    except Exception as e:
-        raise Exception(f"保存结果到 {output_path} 时出错: {e}") from e
-
 def main():
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    os.environ['LOG_FILE'] = f"qa_gen_v1_{timestamp}.log"
-    logger = setup_logging()
-    
-    base_parser = get_base_parser()
-    parser = argparse.ArgumentParser(parents=[base_parser])
-    parser = qa_generation_args(parser)
-    args = parser.parse_args()
-    
-    logger.info(f"Starting QA generation V1 for: {args.input_data}")
-    
-    # 从命令行参数获取难度计数
-    difficulty_counts: Dict[DifficultyLevel, int] = {
-        "easy": args.easy,
-        "medium": args.medium,
-        "hard": args.hard
-    }
+    try:
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        os.environ['LOG_FILE'] = f"qa_gen_v1_{timestamp}.log"
+        logger = setup_logging()
+        
+        base_parser = get_base_parser()
+        parser = argparse.ArgumentParser(parents=[base_parser])
+        parser = qa_generation_args(parser)
+        args = parser.parse_args()
+        
+        logger.info(f"Starting QA generation V1 for: {args.input_data}")
+        
+        # 从命令行参数获取难度计数
+        difficulty_counts: Dict[DifficultyLevel, int] = {
+            "easy": args.easy,
+            "medium": args.medium,
+            "hard": args.hard
+        }
 
-    # 如果所有难度计数都为0
-    if all(count == 0 for count in difficulty_counts.values()):
-        logger.warning("No difficulty level specified. Please use --easy, --medium, or --hard to specify the number of questions.")
-        exit(0)
+        # 如果所有难度计数都为0
+        if all(count == 0 for count in difficulty_counts.values()):
+            logger.warning("No difficulty level specified. Please use --easy, --medium, or --hard to specify the number of questions.")
+            exit(0)
 
-    qa_generator = QuestionGenerator(
-        model=args.model,
-        min_sessions=args.min_sessions,
-        max_sessions=args.max_sessions,
-        session_threshold=args.session_threshold,
-        min_evidences=args.min_evidences,
-        max_evidences=args.max_evidences,
-    )
-    
-    # 加载数据
-    dataset = load_data(args.input_data)
-    logger.info(f"数据集包含 {len(dataset.conversations)} 个对话")
-    
-    # 生成QA对
-    results = qa_generator.batch_generate(dataset, difficulty_counts)
-    logger.info(f"成功生成 {len(results)} 个QA对")
-    
-    # 保存结果
-    os.makedirs(args.output_dir, exist_ok=True)
-    temp = (os.path.splitext(os.path.basename(args.input_data))[0]).split("_")[0]
-    filename = f"{temp}_qa_v1.json"
-    output_path = os.path.join(args.output_dir, filename)
-    save_results(results, output_path)
-    
-    logger.info(f"QA generation V1 complete. Output to: {output_path}")
+        qa_generator = QuestionGenerator(
+            model=args.model,
+            min_sessions=args.min_sessions,
+            max_sessions=args.max_sessions,
+            session_threshold=args.session_threshold,
+            min_evidences=args.min_evidences,
+            max_evidences=args.max_evidences,
+            is_step=args.is_step,
+            max_preferred_examples=args.max_preferred_examples,
+            max_disliked_examples=args.max_disliked_examples,
+            cache_dir=args.cache_dir
+        )
+        
+        # 加载数据
+        dataset = load_data(args.input_data)
+        logger.info(f"数据集包含 {len(dataset.conversations)} 个对话")
+        
+        # 生成QA对。现在batch_generate不返回任何值，而是直接操作缓存。
+        qa_generator.batch_generate(dataset, difficulty_counts) 
+        
+        # 从缓存中获取所有可导出的QA对
+        results = qa_generator.cache_manager.get_exportable_qas()
+        for idx, qa_item in enumerate(results):
+            qa_item["qa_index"] = idx
+        logger.info(f"成功从缓存中收集到 {len(results)} 个QA对准备导出")
+
+    except Exception as e:
+        logger.error(f"An error occurred during QA generation: {e}")
+    finally:
+        if 'results' not in locals():
+            results = []
+        os.makedirs(args.output_dir, exist_ok=True)
+        temp = (os.path.splitext(os.path.basename(args.input_data))[0]).split("_")[0]
+        filename = f"{temp}_qa_v1.json"
+        output_path = os.path.join(args.output_dir, filename)
+        save_results(results, output_path)
+        
+        logger.info(f"QA generation V1 complete. Output to: {output_path}")
 
 if __name__ == "__main__":
     main()

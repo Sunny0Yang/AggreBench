@@ -179,14 +179,14 @@ Generation Requirements (Easy Level):
 6.  **Answer Formatting**:
     - MUST begin with "The answer is: "
     - For numerical answers: "The answer is: [number]"
-    - For numerical answers, please use base units (e.g., '元'). If the answer is a percentage, convert it to a decimal (e.g., 25%% should be 0.25).
+    - For numerical answers, please use base units (e.g., if the answer is '5.20 亿元', convert it to '520000000 元'). If the answer is a percentage, convert it to a decimal (e.g., 25%% should be 0.25).
     - Avoid explanations or justifications in the answer field.
 
 Example:
 {{
-    "question": "What is the latest stock price for 同花顺 (300033.SZ)?",
-    "answer": "The answer is: 287.50",
-    "evidence": ["股票简称: 同花顺; 最新价: 287.50元"]
+    "question": "What is the maximum capital outflow for 万科A on any given date in the provided data?",
+    "answer": "The answer is: 520000000 元",
+    "evidence": ["股票简称: 万科A; 资金流出[20231212]: 5.25亿元"]
 }}
 """,
     
@@ -220,7 +220,7 @@ Generation Requirements (Medium Level):
 6.  **Answer Formatting**:
     - MUST begin with "The answer is: "
     - For numerical answers: "The answer is: [number]"
-    - For numerical answers, please use base units (e.g., '元'). If the answer is a percentage, convert it to a decimal (e.g., 25%% should be 0.25).
+    - For numerical answers, please use base units (e.g., if the answer is '5.20 亿元', convert it to '520000000 元'). If the answer is a percentage, convert it to a decimal (e.g., 25%% should be 0.25).
     - Avoid explanations or justifications in the answer field.
 
 Example:
@@ -267,21 +267,24 @@ Generation Requirements (Hard Level):
 7.  **Answer Formatting**:
     - MUST begin with "The answer is: "
     - For numerical answers: "The answer is: [number]"
-    - For numerical answers, please use base units (e.g., '元'). If the answer is a percentage, convert it to a decimal (e.g., 25%% should be 0.25).
+    - For numerical answers, please use base units (e.g., if the answer is '5.20 亿元', convert it to '520000000 元'). If the answer is a percentage, convert it to a decimal (e.g., 25%% should be 0.25).
     - Avoid explanations or justifications in the answer field.
 
 Example:
 {{
-    "question": "Between December 1st and December 15th, 2023, what was the average *positive* daily capital inflow for 同花顺 (300033.SZ) after excluding days with negative flow?",
-    "answer": "The answer is: 205696144.0",
+    "question": "Calculate the percentage change in net capital flow (inflow minus outflow) from December 1–7 to December 25–31, 2023 and report the single rounded-to-two-decimals figure?",
+    "answer": "The answer is: 0.36",
     "evidence": [
         "股票简称: 同花顺; 资金流向[20231201]: 2.79亿元",
+        "股票简称: 同花顺; 资金流出[20231201]: 5.04亿元",
         "股票简称: 同花顺; 资金流向[20231204]: 5.70亿元",
-        "股票简称: 同花顺; 资金流向[20231205]: 4814.18万元",
-        "股票简称: 同花顺; 资金流向[20231206]: 243.55万元",
-        "股票简称: 同花顺; 资金流向[20231207]: 1.62亿元",
-        "股票简称: 同花顺; 资金流向[20231208]: 4.56亿元",
-        "股票简称: 同花顺; 资金流向[20231211]: 3.57亿元"
+        "股票简称: 同花顺; 资金流出[20231204]: 6.80亿元",
+        "股票简称: 同花顺; 资金流向[20231222]: -112451513.00元",
+        "股票简称: 同花顺; 资金流出[20231222]: 4.29亿元",
+        "股票简称: 同花顺; 资金流向[20231225]: -21258570.00元",
+        "股票简称: 同花顺; 资金流出[20231225]: 2.32亿元",
+        "股票简称: 同花顺; 资金流向[20231228]: 2.94亿元",
+        "股票简称: 同花顺; 资金流出[20231228]: 6.31亿元"
     ]
 }}
 """,
