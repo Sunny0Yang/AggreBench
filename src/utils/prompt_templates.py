@@ -201,8 +201,7 @@ Decision-making process
 1. Review the list above and pick **one coherent group** (≈8 points) **or** a specific query. 
 2. Formulate a **concise** follow-up (1–2 sentences). 
 3. Tone: neutral, casual, not overly polite. 
-4. **After your message**, list every **exact original tuple evidence** you just referenced under 
- `EVIDENCES_USED_IN_THIS_TURN:` (this block is **not** part of chat history).
+4. **After your message**, list every **exact original tuple evidence** you just referenced. Each evidence MUST be on a new line, starting with '- ', and contain ONLY ONE complete tuple. This `EVIDENCES_USED_IN_THIS_TURN:` block is NOT part of chat history.
 
 Past Conversation Summary: 
 {summary_of_past_conversation}
@@ -220,8 +219,8 @@ Example of EVIDENCES_USED_IN_THIS_TURN:
 Persona: {persona} 
 
 EVIDENCES_USED_IN_THIS_TURN:
-- [tuple evidence 1]
-- [tuple evidence 2]
+- (full_tuple_evidence_1)
+- (full_tuple_evidence_2)
 """,
     "assistant": """
 You are a professional AI assistant specialized in finance. 
@@ -247,7 +246,8 @@ Last Turn:
 User's Latest Input: {user_input}
 
 EVIDENCES_USED_IN_THIS_TURN:
-- [tuple evidence 1]
-- [tuple evidence 2]
+Each line below MUST contain exactly one full, valid tuple evidence.
+- (full_tuple_evidence_1)
+- (full_tuple_evidence_2)
 """
 })
