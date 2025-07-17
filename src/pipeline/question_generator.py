@@ -5,14 +5,16 @@ import time
 import random
 import logging
 import argparse
-from typing import Any, List, Dict, Literal, Tuple
+from typing import Any, List, Dict, Literal, Tuple, Union
 
 from utils.params import get_base_parser, qa_generation_args
 from utils.logger import setup_logging
 from utils.prompt_templates import QA_GENERATION_PROMPTS
 from client.llm_client import client
 from utils.struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset, load_data, save_results
-from utils.cache_manager import QACacheManager, DifficultyLevel # Import DifficultyLevel from cache_manager
+from utils.cache_manager import QACacheManager, DifficultyLevel
+from utils.sql_engine import SqlEngine
+from utils.validator import Validator
 
 class QuestionGenerator:
     def __init__(self, model: str,
@@ -28,9 +30,9 @@ class QuestionGenerator:
         self.session_threshold = session_threshold
         self.min_evidences = min_evidences
         self.max_evidences = max_evidences
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger(self.__class__.__name__)
         self.difficulty: DifficultyLevel = "easy"
-        self.cache_manager = QACacheManager(cache_dir)
+        self.cache_manager = QACacheManager(cache_dir) # init includes loading cache
         self.is_step = is_step
         self.max_preferred_examples = max_preferred_examples
         self.max_disliked_examples = max_disliked_examples
@@ -44,11 +46,9 @@ class QuestionGenerator:
             print("\n--- Step-by-step mode: QA Generation Preview. ---")
             print(f"\n您可以检查缓存文件 {self.cache_manager.current_cache_path} ，然后按回车键继续...")
             input("Press Enter to continue...")
-            self.cache_manager.load_cache()
-        # global_qa_idx should represent the count of currently 'exportable' (liked/generated) QAs
-        # across the *entire* cache, for correct sequential indexing in the final output.
-        global_qa_idx = len(self.cache_manager.get_exportable_qas())
-        self.logger.info(f"Loaded {len(self.cache_manager.get_all_qas())} QAs from cache. Starting global QA index from {global_qa_idx}.")
+            self.cache_manager.load_cache() # Reload cache to reflect external changes if any
+        
+        self.logger.info(f"Loaded {len(self.cache_manager.get_all_qas())} QAs from cache. Starting global QA index from {len(self.cache_manager.get_exportable_qas())}.")
 
         for conversation in dataset.conversations:
             for difficulty, num_qa_for_difficulty in difficulty_counts.items():
@@ -64,19 +64,20 @@ class QuestionGenerator:
                     [qa for qa in self.cache_manager.get_all_qas(difficulty=difficulty) 
                      if qa.get("conversation_id") == conversation.id and qa.get("status") in ["liked", "generated"]]
                 )
+                
                 if generated_count_for_current_difficulty >= num_qa_for_difficulty:
                     self.logger.info(f"Skipping generation for '{difficulty}' difficulty as already generated {generated_count_for_current_difficulty}/{num_qa_for_difficulty} QAs.")
                     continue
+                
                 while generated_count_for_current_difficulty < num_qa_for_difficulty:
-                    qa_dict, _ = self._generate_single_qa(conversation, global_qa_idx)
+                    qa_dict, _ = self._generate_single_qa(conversation)
                     if qa_dict:
                         generated_count_for_current_difficulty += 1
-                        global_qa_idx += 1
                         self.logger.info(f"成功生成了第 {generated_count_for_current_difficulty}/{num_qa_for_difficulty} 个 '{self.difficulty}' 难度QA")
                     else:
                         self.logger.info(f"重新生成第{generated_count_for_current_difficulty}/{num_qa_for_difficulty} 个 '{self.difficulty}' 难度QA")
-    
-    def _generate_single_qa(self, conversation: Conversation, global_qa_idx: int) -> Tuple[Dict | None, List[Session]]:
+
+    def _generate_single_qa(self, conversation: Conversation) -> Tuple[Dict | None, List[Session]]:
         """
         生成单个QA对，并处理缓存逻辑和用户交互。
         返回生成的QA字典和所选会话列表，如果生成失败或用户拒绝则返回 (None, None)。
@@ -102,12 +103,12 @@ class QuestionGenerator:
             disliked_qas=disliked_qas
         )
 
-        qa_response = self.generate_qa(session_context, additional_guidance)
+        qa_response = self._generate_llm_qa(session_context, additional_guidance)
         if not qa_response:
             self.logger.warning("LLM did not return a valid response.")
             return None, None
         
-        qa_dict = self._parse_response(qa_response)
+        qa_dict = self._parse_llm_response(qa_response)
         if not qa_dict:
             self.logger.warning("Failed to parse LLM response into a QA dictionary.")
             return None, None
@@ -123,7 +124,7 @@ class QuestionGenerator:
             print("\n--- Step-by-step mode: New QA Generated. ---")
             print(f"Question: {qa_dict.get('question_text')}")
             print(f"\n请检查这次生成的问题。输入 'y' 标记为【偏好问题】（保存进数据集）；输入 'n' 标记为【不喜欢】（保存进cache），并重新生成；输入 'r' 重新生成（不保存进cache）；按回车键标记为【已生成】（保存进数据集）。")
-            char = input("输入 'y', 'n', 'r'或回车键继续...\n").strip().lower() # Read and standardize user input
+            char = input("输入 'y', 'n', 'r'或回车键继续...\n").strip().lower() 
             
             if char == "y":
                 self.cache_manager.add_qa(qa_dict, status="liked")
@@ -144,14 +145,12 @@ class QuestionGenerator:
                 self.logger.info(f"QA {qa_dict['qa_id']} marked as 'generated'.")
                 return qa_dict, selected_sessions
         else:
-            # Not in step-by-step mode, automatically add as 'generated'
             self.cache_manager.add_qa(qa_dict, status="generated")
             self.cache_manager.save_cache()
             self.logger.info(f"QA {qa_dict['qa_id']} added as 'generated'.")
             return qa_dict, selected_sessions
 
     def _build_session_context(self, sessions: List[Session]) -> str:
-        """构建会话上下文表示（支持结构化数据）"""
         context = ""
         for session in sessions:
             context += f"### Session ID: {session.id}\n"
@@ -173,13 +172,12 @@ class QuestionGenerator:
                 context += "Dialogs:\n"
                 for turn in session.turns:
                     context += f"Turn {turn.id}: {turn.speaker}: {turn.content}\n"
-            
             context += "\n"
         return context
 
     def _build_additional_guidance(self, preferred_qas: List[Dict], disliked_qas: List[Dict]) -> str:
         """
-        构建额外的指导信息，包含偏好问题、不偏好问题和所有已生成问题文本。
+        构建额外的指导信息，包含偏好问题、不偏好问题。
         """
         guidance = ""
 
@@ -207,12 +205,11 @@ class QuestionGenerator:
                 "Your task is to generate **semantically unique questions** that adhere to these principles, but are distinct in their wording and specific focus.\n"
             )
             for idx, qa in enumerate(selected_preferred_qas):
-                guidance += f"  Good Example {idx + 1}:\n"
-                guidance += f"    Question: {qa.get('question_text', 'N/A')}\n"
-                guidance += f"    Answer: {qa.get('answer_text', 'N/A')}\n"
-                guidance += f"    Evidence: {', '.join(qa.get('evidence', []))}\n"
-            guidance += "\n"
-
+                guidance += f" Good Example {idx + 1}:\n"
+                guidance += f"  Question: {qa.get('question_text')}\n"
+                guidance += f"  Answer: {qa.get('answer_text')}\n"
+                guidance += "\n"
+        
         # Section 3: Disliked Questions (Negative Examples)
         selected_disliked_qas = random.sample(disliked_qas, min(len(disliked_qas), self.max_disliked_examples))
         if selected_disliked_qas:
@@ -230,7 +227,7 @@ class QuestionGenerator:
             
         return guidance
 
-    def generate_qa(self, session_context: str, additional_guidance: str) -> str:
+    def _generate_llm_qa(self, session_context: str, additional_guidance: str) -> str:
         """生成单个QA对"""
         is_structured = "structured table" in session_context.lower()
         
@@ -274,7 +271,7 @@ class QuestionGenerator:
         self.logger.debug(f"API response: {response_content}")
         return response_content
 
-    def _parse_response(self, response: str) -> Dict:
+    def _parse_llm_response(self, response: str) -> Dict:
         """解析LLM响应为结构化字典"""
         try:
             temp = json.loads(response.strip())
@@ -284,12 +281,16 @@ class QuestionGenerator:
                 temp["answer_text"] = temp.pop("answer")
 
             if isinstance(temp.get("answer_text"), str):
-                match = re.search(r"^The answer is:\s*(-?[0-9]+(?:\.[0-9]+)?)", temp["answer_text"])
-                if match:
-                    temp["answer_text"] = float(match.group(1))
+                s = temp["answer_text"]
+                m_pct = re.search(r"^The answer is:\s*(-?\d+(?:\.\d+)?)%", s)
+                if m_pct:
+                    temp["answer_text"] = float(m_pct.group(1)) / 100.0
                 else:
-                    temp["answer_text"] = temp["answer_text"].replace("The answer is: ", "").strip()
-            
+                    m_num = re.search(r"^The answer is:\s*(-?\d+(?:\.\d+)?)", s)
+                    if m_num:
+                        temp["answer_text"] = float(m_num.group(1))
+                    else:
+                        temp["answer_text"] = s.replace("The answer is: ", "").strip()
             if isinstance(temp.get("evidence"), list):
                 temp["evidence"] = [str(e).strip() for e in temp["evidence"]]
             elif isinstance(temp.get("evidence"), str):
@@ -302,31 +303,254 @@ class QuestionGenerator:
             self.logger.error(f"解析响应时发生错误: {e}.")
             return None
 
+class BatchValidator:
+    """
+    负责对已生成的问题答案对进行SQL验证和智能修正的类。
+    """
+    def __init__(self, model: str):
+        self.sql_engine = SqlEngine()
+        self.validator = Validator()
+        self.model = model
+        self.logger = logging.getLogger(self.__class__.__name__)
+
+    def validate_qas(self, cache_manager: QACacheManager, dataset: ConversationDataset, is_step: bool):
+        """
+        遍历缓存中的QA对，进行SQL验证和修正。
+        """
+        self.logger.info("Starting QA validation process.")
+        
+        # Get all generated/liked QAs that haven't been successfully SQL verified
+        qas_to_validate = [
+            qa for qa in cache_manager.get_exportable_qas() 
+            if qa.get("sql_status") not in ["match", "skipped"]
+        ]
+        self.logger.info(f"Found {len(qas_to_validate)} QAs to validate.")
+
+        if is_step:
+            print("\n--- Step-by-step mode: QA Validation Preview. ---")
+            print(f"\n您可以检查缓存文件 {cache_manager.current_cache_path} ，然后按回车键继续...")
+            input("Press Enter to continue...")
+            cache_manager.load_cache() # Reload cache before validation step
+
+        for qa_item in qas_to_validate:
+            question = qa_item.get("question_text")
+            answer_llm = qa_item.get("answer_text")
+            evidence_llm = qa_item.get("evidence")
+            conversation_id = qa_item.get("conversation_id")
+            session_ids = qa_item.get("session_ids")
+
+            if not question or not answer_llm or not evidence_llm or not conversation_id or not session_ids:
+                self.logger.warning(f"Skipping malformed QA item: {qa_item.get('qa_id')}")
+                continue
+
+            # Find the relevant sessions from the dataset
+            relevant_conversation = next((conv for conv in dataset.conversations if conv.id == conversation_id), None)
+            if not relevant_conversation:
+                self.logger.warning(f"Conversation {conversation_id} not found for QA {qa_item.get('qa_id')}. Skipping validation.")
+                qa_item["sql_status"] = "sql_skipped_no_conversation"
+                cache_manager.add_qa(qa_item, status=qa_item.get("status"), sql_status=qa_item.get("sql_status"))
+                cache_manager.save_cache()
+                continue
+
+            selected_sessions = [s for s in relevant_conversation.sessions if s.id in session_ids]
+            if not selected_sessions:
+                self.logger.warning(f"Sessions {session_ids} not found for QA {qa_item.get('qa_id')}. Skipping validation.")
+                qa_item["sql_status"] = "sql_skipped_no_sessions"
+                cache_manager.add_qa(qa_item, status=qa_item.get("status"), sql_status=qa_item.get("sql_status"))
+                cache_manager.save_cache()
+                continue
+            
+            self.logger.info(f"Validating QA: {qa_item.get('qa_id')}")
+
+            # Perform validation and correction
+            sql_info = self.validate_and_correct(
+                                    question=question,
+                                    answer_llm=answer_llm,
+                                    evidence_llm=evidence_llm,
+                                    sessions=selected_sessions
+                                )
+            
+            # Update cache with validation results
+            cache_manager.add_qa(qa_item, status=qa_item.get("status"), sql_info = sql_info)
+            cache_manager.save_cache()
+            self.logger.info(f"QA {qa_item.get('qa_id')} validation complete. Status: {sql_info.get('sql_status')}")
+
+
+    def validate_and_correct(self, question: str, answer_llm: Any, 
+                             evidence_llm: List[str], sessions: List[Session]) -> Dict:
+        """
+        执行验证：LLM生成的SQL查询与数据库结果对比。
+        """
+        result = {
+            "sql_status": "not yet",
+            "sql_answer_query": None,
+            "sql_evidence_query": None,
+            "sql_answer": None,
+            "sql_evidence": None,
+            "error": None
+        }
+        
+        tables = []
+        for session in sessions:
+            if session.tables:
+                tables.extend(session.tables)
+        
+        if not tables:
+            self.logger.warning(f"没有可用的表格数据，跳过SQL验证。")
+            result["sql_status"] = "sql_skipped"
+            return result
+        
+        try:
+            # Create table in memory for the current validation context
+            self.sql_engine.create_table_from_struct(tables)
+            self.logger.info(f"成功创建内存表并填充数据。")
+
+            # Generate SQL queries using LLM
+            sql_prompt = self._generate_sql_prompt(question, tables)
+            full_sql = self._generate_sql_from_llm(sql_prompt)
+
+            # Parse dual queries (answer and evidence)
+            answer_query, evidence_query = self._parse_double_query(full_sql)
+            result["sql_answer_query"] = answer_query
+            result["sql_evidence_query"] = evidence_query
+            self.logger.debug(f"Answer SQL: {answer_query}")
+            self.logger.debug(f"Evidence SQL: {evidence_query}")
+
+            # Execute answer query
+            answer_results = self.sql_engine.execute_query(answer_query)
+            answer_sql = answer_results[0][list(answer_results[0].keys())[0]] if answer_results and list(answer_results[0].keys()) else None
+            self.logger.debug(f"Answer SQL Result: {answer_sql}")
+            
+            # Execute evidence query
+            evidence_results = self.sql_engine.execute_query(evidence_query)
+            self.logger.debug(f"Evidence SQL Result: {evidence_results}")
+
+            # Perform two-stage validation
+            self.logger.info(f"开始对比验证。")
+            answer_match = self.validator.compare_answers(answer_llm, answer_sql)
+            evidence_match = self.validator.compare_evidence(evidence_llm, evidence_results)
+
+            if answer_match and evidence_match:
+                result["sql_status"] = "match"
+            else:
+                status_parts = []
+                if not answer_match:
+                    status_parts.append("answer_not_match")
+                if not evidence_match:
+                    status_parts.append("evidence_not_match")
+                result["sql_status"] = "; ".join(status_parts)
+            
+            result["sql_answer"] = answer_sql
+            result["sql_evidence"] = evidence_results
+
+        except Exception as e:
+            self.logger.error(f"SQL验证失败: {e}", exc_info=True)
+            result["sql_status"] = "failed"
+            result["error"] = str(e)
+
+        return result
+
+    def _generate_sql_prompt(self, question: str, tables: List[Table]) -> str:
+        """生成用于SQL查询的提示词"""
+        context = ""
+        for i, table in enumerate(tables):
+            # Quote headers for SQL context
+            table_headers = [f'"{h}"' for h in table.headers]
+            context += f"Table_{i} (Columns: {', '.join(table_headers)}):\n"
+            if table.rows:
+                row_content = (',').join(f"{k}: {v}" for k, v in table.rows[0].items())
+                context += f"Sample Row: {row_content}\n"
+        return QA_GENERATION_PROMPTS["sql_prompt_template"].format(
+            question=question,
+            tables=context
+        )
+
+    def _generate_sql_from_llm(self, prompt: str) -> str:
+        """使用LLM生成双查询SQL语句"""
+        messages = [
+            {"role": "system", "content": "你是一个SQL专家，专门将自然语言问题转换为SQL查询。请严格按照要求返回两个SQL查询语句：第一个用于获取问题的答案，第二个用于获取支持答案的证据。每个查询必须在新的一行开始，并以 `;` 结尾。"},
+            {"role": "user", "content": prompt}
+        ]
+        try:
+            completion = client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                stream=False,
+                extra_body={"enable_thinking": False}
+            )
+            self.logger.debug(f"LLM SQL response: {completion.choices[0].message.content}")
+            return completion.choices[0].message.content
+        except Exception as e:
+            self.logger.error(f"SQL生成失败: {e}")
+            return None
+
+    def _parse_double_query(self, full_sql: str) -> Tuple[str, str]:
+        """解析LLM生成的包含SQL_ANSWER和SQL_EVIDENCE的双查询字符串。"""
+        self.logger.debug(f"Raw SQL response: {full_sql}")
+        answer_sql = ""
+        evidence_sql = ""
+        answer_match = re.search(
+            r'SQL_ANSWER:\s*(.*?)(?=(?:SQL_EVIDENCE:|$))', 
+            full_sql,
+            re.DOTALL | re.IGNORECASE
+        )
+
+        evidence_match = re.search(
+            r'SQL_EVIDENCE:\s*(.*)',
+            full_sql,
+            re.DOTALL | re.IGNORECASE
+        )
+
+        if answer_match:
+            answer_sql = self._clean_sql(answer_match.group(1))
+        if evidence_match:
+            evidence_sql = self._clean_sql(evidence_match.group(1))
+
+        if not answer_sql or not evidence_sql:
+            self.logger.error(f"未能解析LLM的SQL响应，格式不正确或缺少SQL。原始文本:\n{sql_text}")
+            raise ValueError("未能解析LLM的SQL响应，格式不正确或缺少SQL。")
+        self.logger.debug(f"Parsed SQL - Answer: {answer_sql}")
+        self.logger.debug(f"Parsed SQL - Evidence: {evidence_sql}")    
+        return answer_sql, evidence_sql
+
+    def _clean_sql(self, sql_string: str) -> str:
+        """清理LLM返回的SQL字符串，移除Markdown代码块标记和多余的空白。"""
+        cleaned = re.sub(r'^\s*```(?:sql)?\s*|\s*```\s*$', '', sql_string, flags=re.IGNORECASE | re.DOTALL)
+        cleaned = cleaned.strip()
+        statements = [s.strip() for s in cleaned.split(';') if s.strip()]
+        if len(statements) > 1:
+            self.logger.warning(f"检测到多个SQL语句，只使用第一个: '{cleaned}'")
+            return statements[0]
+        elif statements:
+            return statements[0]
+        else:
+            return ""
+
 def main():
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    os.environ['LOG_FILE'] = f"qa_gen_{timestamp}.log"
+    logger = setup_logging()
+
+    parser = get_base_parser()
+    qa_generation_args(parser)
+    args = parser.parse_args()
+    
+    logger.info("Starting QA generation process.")
     try:
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        os.environ['LOG_FILE'] = f"qa_gen_v1_{timestamp}.log"
-        logger = setup_logging()
+        # Load data
+        dataset = load_data(args.input_data)
+        logger.info(f"数据集包含 {len(dataset.conversations)} 个对话")
         
-        base_parser = get_base_parser()
-        parser = argparse.ArgumentParser(parents=[base_parser])
-        parser = qa_generation_args(parser)
-        args = parser.parse_args()
-        
-        logger.info(f"Starting QA generation V1 for: {args.input_data}")
-        
-        # 从命令行参数获取难度计数
         difficulty_counts: Dict[DifficultyLevel, int] = {
             "easy": args.easy,
             "medium": args.medium,
             "hard": args.hard
         }
-
         # 如果所有难度计数都为0
         if all(count == 0 for count in difficulty_counts.values()):
             logger.warning("No difficulty level specified. Please use --easy, --medium, or --hard to specify the number of questions.")
             exit(0)
-
+        # Initialize QuestionGenerator (generation phase)
         qa_generator = QuestionGenerator(
             model=args.model,
             min_sessions=args.min_sessions,
@@ -340,30 +564,34 @@ def main():
             cache_dir=args.cache_dir
         )
         
-        # 加载数据
-        dataset = load_data(args.input_data)
-        logger.info(f"数据集包含 {len(dataset.conversations)} 个对话")
-        
         qa_generator.batch_generate(dataset, difficulty_counts) 
         
-        # 从缓存中获取所有可导出的QA对
+        # --- Second Stage: Validation (Optional) ---
+        if args.enable_validation:
+            logger.info("Enabling QA validation process.")
+            batch_validator = BatchValidator(model=args.model)
+            batch_validator.validate_qas(qa_generator.cache_manager, dataset, args.is_step)
+            logger.info("QA validation process completed.")
+
+        # 从缓存中获取所有可导出的QA对 (liked or generated)
         results = qa_generator.cache_manager.get_exportable_qas()
         for idx, qa_item in enumerate(results):
             qa_item["qa_index"] = idx
         logger.info(f"成功从缓存中收集到 {len(results)} 个QA对准备导出")
 
     except Exception as e:
-        logger.error(f"An error occurred during QA generation: {e}")
+        logger.error(f"An error occurred during QA processing: {e}", exc_info=True)
     finally:
         if 'results' not in locals():
             results = []
         os.makedirs(args.output_dir, exist_ok=True)
-        temp = (os.path.splitext(os.path.basename(args.input_data))[0]).split("_")[0]
-        filename = f"{temp}_qa_v1.json"
-        output_path = os.path.join(args.output_dir, filename)
-        save_results(results, output_path)
+        # Create a dynamic filename based on input data and validation status
+        temp_filename = os.path.splitext(os.path.basename(args.input_data))[0]
+        output_filename = f"{temp_filename}_qas_validated.json" if args.enable_validation else f"{temp_filename}_qas_generated.json"
         
-        logger.info(f"QA generation V1 complete. Output to: {output_path}")
+        output_path = os.path.join(args.output_dir, output_filename)
+        save_results(results, output_path)
+        logger.info(f"结果已保存到: {output_path}")
 
 if __name__ == "__main__":
     main()

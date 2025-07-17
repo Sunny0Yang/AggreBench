@@ -101,11 +101,13 @@ class QACacheManager(BaseCacheManager):
         qa_content_string = f"{qa_pair.get('question_text', '')}"
         return hashlib.md5(qa_content_string.encode('utf-8')).hexdigest()
 
-    def add_qa(self, qa_pair: Dict, status: str = "generated") -> bool:
+    def add_qa(self, qa_pair: Dict, status: str = "generated", sql_info: dict = {}) -> bool:
         """
         添加或更新一个QA对到缓存中。
-        如果QA对已存在（通过qa_id判断），则更新其信息（特别是status）。
+        如果QA对已存在（通过qa_id判断），则更新其信息（特别是status/sql_status）。
         否则，添加新的QA对。
+        status: liked / disliked / generated
+        sql_status: match / skipped / *_not_match / not yet / failed
         优先保留 'liked' 或 'disliked' 状态，不被 'generated' 覆盖。
         """
         qa_id = qa_pair.get("qa_id")
@@ -124,11 +126,12 @@ class QACacheManager(BaseCacheManager):
             "question_text": qa_pair.get("question_text"),
             "answer_text": qa_pair.get("answer_text"),
             "evidence": qa_pair.get("evidence"),
-            "difficulty": qa_pair.get("difficulty"),
             "conversation_id": qa_pair.get("conversation_id"),
             "session_ids": qa_pair.get("session_ids"),
             "timestamp": qa_pair.get("timestamp", time.strftime("%Y-%m-%dT%H:%M:%S")),
-            "status": status
+            "difficulty": qa_pair.get("difficulty"),
+            "status": status,
+            "sql_info": sql_info
         }
 
         if existing_qa_index != -1:
