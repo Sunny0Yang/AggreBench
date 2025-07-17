@@ -4,21 +4,116 @@ import json
 import os
 import re
 import logging
-from typing import List, Dict
-from utils.struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset
+from typing import List, Dict, Tuple, Any
+from utils.struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset, Evidence
 from utils.session_simulator import SessionSimulator
 from utils.prompt_templates import PERSONA
+
 logger = logging.getLogger(__name__)
 
 class BizFinLoader:
     def __init__(self, model:str, max_turns:int, is_step:bool, cache_dir: str,
-        combine_size = 10, generate_pseudo_dialogue=True
-        ):
+                 combine_size = 10, generate_pseudo_dialogue=True
+                 ):
         self.logger = logger
         self.combine_size = combine_size
         self.session_simulator = SessionSimulator(model=model, max_turns=max_turns, is_step=is_step, cache_dir=cache_dir)
         self.generate_pseudo_dialogue = generate_pseudo_dialogue
         self.persona = PERSONA["financial"]
+        self.fund_flow_header_pattern = re.compile(r"(资金流向|资金流出)\[(\d{8})]")
+        self.currency_pattern = re.compile(r"^(-?\d+(\.\d+)?)\s*(元|万元|亿元)$")
+        self.percentage_pattern = re.compile(r"^(-?\d+(\.\d+)?)%$")
+
+    def _create_combined_conversation(self, samples: List[Dict], conversation_id: str) -> Conversation:
+        """创建组合对话对象"""
+        sessions = []
+        session_counter = 1   # 会话计数器
+        
+        # 处理每个样本
+        for sample_idx, sample in enumerate(samples):
+            # 提取样本中的会话
+            sample_session = self._extract_session(sample, conversation_id, session_counter)
+            if sample_session:
+                sessions.append(sample_session)
+                session_counter += 1
+        
+        return Conversation(
+            conversation_id=conversation_id,
+            speakers=["Assistant"],
+            sessions=sessions,
+        )
+
+    def _extract_session(self, sample: Dict, conversation_id: str, start_index: int) -> Session:
+        """从样本中提取会话并重新编号，进行表格规范化处理。"""
+        
+        messages = sample.get("messages", [])
+        
+        # 1. 提取所有原始宽格式表格数据
+        all_raw_tables_data = []
+        for msg in messages:
+            if msg.get("role") == "user":
+                for content in msg.get("content", []):
+                    if content.get("type") == "text":
+                        raw_tables_extracted = self._extract_tables(content["text"])
+                        all_raw_tables_data.extend(raw_tables_extracted)
+        
+        if not all_raw_tables_data:
+            self.logger.warning(f"No raw tables found for session in sample {sample.get('id', 'N/A')}. Skipping session.")
+            return None
+
+        # 2. 将原始 dict tables 转换为 Table 对象列表
+        raw_table_objects = []
+        for table_data in all_raw_tables_data:
+            table = Table(
+                headers=table_data["headers"],
+                rows=table_data["rows"]
+            )
+            raw_table_objects.append(table)
+        
+        # 3. 规范化原始表格数据
+        normalized_tables = self._normalize_tables(raw_table_objects)
+
+        if not normalized_tables:
+            self.logger.warning(f"No normalized tables generated from raw tables for sample {sample.get('id', 'N/A')}. Skipping session.")
+            return None # Skip session if no normalized tables are created
+
+        session_id = f"{conversation_id}_session_{start_index}"
+        
+        turns = []
+        if self.generate_pseudo_dialogue:
+            # 4. 从规范化后的表格生成证据
+            evidences = self._table_to_evidences(normalized_tables)
+            
+            # 5. 生成对话回合
+            dialog = self.session_simulator.generate_dialog(
+                evidences=evidences,
+                persona=self.persona
+            )
+            
+            # 6. 转换为MultiModalTurn对象
+            for turn_idx, turn in enumerate(dialog):
+                turns.append(MultiModalTurn(
+                    turn_id=f"{session_id}_turn_{turn_idx+1}",
+                    speaker=turn["speaker"],
+                    content=turn["content"]
+                ))
+        else:
+            # 如果不需要伪对话，添加简单的表头信息（基于规范化后的表格）
+            turns.append(MultiModalTurn(
+                turn_id=f"{session_id}_title",
+                speaker="Assistant",
+                content=f"Session contains {len(normalized_tables)} normalized tables"
+            ))
+            
+        session = Session(
+            session_id=session_id,
+            time="N/A",
+            participants = ["User", "Assistant"] if self.generate_pseudo_dialogue else ["Assistant"],
+            turns=turns,
+            tables=normalized_tables # 存储规范化后的表格
+        )
+        
+        return session
 
     def _extract_tables(self, text_content: str) -> List[Dict]:
         """从文本内容中提取表格数据"""
@@ -34,10 +129,10 @@ class BizFinLoader:
             
             # 提取数据行
             rows = []
-            for row in match[3].split('\n'):
-                if not row.strip() or row.startswith('|---'):
+            for row_str in match[3].split('\n'):
+                if not row_str.strip() or row_str.startswith('|---'):
                     continue
-                cols = [c.strip() for c in row.split('|') if c.strip()]
+                cols = [c.strip() for c in row_str.split('|') if c.strip()]
                 if len(cols) == len(headers):
                     rows.append(dict(zip(headers, cols)))
             
@@ -49,102 +144,124 @@ class BizFinLoader:
         
         return tables
 
-    def _create_combined_conversation(self, samples: List[Dict], conversation_id: str) -> Conversation:
-        """创建组合对话对象"""
-        sessions = []
-        session_counter = 1  # 会话计数器
-        
-        # 处理每个样本
-        for sample_idx, sample in enumerate(samples):
-            # 提取样本中的会话
-            sample_session = self._extract_session(sample, conversation_id, session_counter)
-            sessions.append(sample_session)
-            session_counter += 1
-        
-        return Conversation(
-            conversation_id=conversation_id,
-            speakers=["Assistant"],
-            sessions=sessions,
-        )
+    def _normalize_tables(self, raw_table_objects: List[Table]) -> List[Table]:
+        """
+        将原始的宽格式表格转换为规范化的资金流向表格（net_flow 和 outflow）。
+        """
+        net_flow_rows = []
+        outflow_rows = []
+        # For this request, we only focus on `capital_net_flow` and `capital_outflow`.
 
-    def _table_to_evidences(self, table_objects: List[Table]) -> List[str]:
-        """将表格转换为证据列表"""
-        evidences = []
-        for table in table_objects:
-            for row in table.rows:
-                stock_code = row.get("股票代码", "未知代码")
-                stock_name = row.get("股票简称", "未知股票")
-                prefix = f"{stock_name}({stock_code})"
-                for key, value in row.items():
-                    if key in ["股票代码", "股票简称"]:
-                        continue
-                    evidences.append(f"{prefix} {key}: {value}")
-        evidences = list(set(evidences))
-        return evidences
+        for raw_table in raw_table_objects:
+            for row_dict in raw_table.rows:
+                stock_code = row_dict.get("股票代码")
+                stock_name = row_dict.get("股票简称")
+                
+                if not stock_code or not stock_name:
+                    self.logger.warning(f"跳过缺少 '股票代码' 或 '股票简称' 的行: {row_dict}")
+                    continue
 
-    def _extract_session(self, sample: Dict, conversation_id: str, start_index: int) -> Session:
-        """从样本中提取会话并重新编号"""
-        sessions = []
-        messages = sample.get("messages", [])
+                for header, value_str in row_dict.items():
+                    date_match = self.fund_flow_header_pattern.match(header)
+                    if date_match:
+                        flow_type = date_match.group(1) # "资金流向" or "资金流出"
+                        date_str = date_match.group(2)  # YYYYMMDD
+                        # Convert to YYYY-MM-DD for consistency with DATE type
+                        formatted_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+                        
+                        standardized_value = self._parse_and_standardize_value(value_str)
+
+                        if isinstance(standardized_value, (int, float)):
+                            if flow_type == "资金流向":
+                                net_flow_rows.append({
+                                    "code": stock_code,
+                                    "sname": stock_name,
+                                    "tdate": formatted_date,
+                                    "net_flow": standardized_value
+                                })
+                            elif flow_type == "资金流出":
+                                outflow_rows.append({
+                                    "code": stock_code,
+                                    "sname": stock_name,
+                                    "tdate": formatted_date,
+                                    "outflow": abs(standardized_value)
+                                })
+                        else:
+                            self.logger.warning(f"无法标准化资金流向/流出值 '{value_str}' for {stock_name} on {formatted_date}. 原始值: {value_str}")
         
-        # 提取所有表格数据
-        all_tables = []
-        for msg in messages:
-            if msg.get("role") == "user":
-                for content in msg.get("content", []):
-                    if content.get("type") == "text":
-                        tables = self._extract_tables(content["text"])
-                        all_tables.extend(tables)
-        if not all_tables:
-            return []
-
-        session_id = f"{conversation_id}_session_{start_index}"
-
-        # 创建Table对象列表
-        table_objects = []
-        for table_data in all_tables:
-            table = Table(
-                headers=table_data["headers"],
-                rows=table_data["rows"]
-            )
-            table_objects.append(table)
-        
-        # 为每个sample（几张表）创建一个session
-        turns = []
-        if self.generate_pseudo_dialogue:
-            conv_id = conversation_id.split('_')[-1]
-            # 生成表格evidence
-            evidences = self._table_to_evidences(table_objects)
-            # 生成对话回合
-            dialog = self.session_simulator.generate_dialog(
-                evidences=evidences,
-                persona=self.persona
-            )
-            
-            # 转换为MultiModalTurn对象
-            for turn_idx, turn in enumerate(dialog):
-                turns.append(MultiModalTurn(
-                    turn_id=f"{session_id}_turn_{turn_idx+1}",
-                    speaker=turn["speaker"],
-                    content=turn["content"]
-                ))
-        else:
-            # 如果不需要伪对话，添加简单的表头信息
-            turns.append(MultiModalTurn(
-                turn_id=f"{session_id}_title",
-                speaker="Assistant",
-                content=f"Session contains {len(all_tables)} tables"
+        normalized_tables = []
+        if net_flow_rows:
+            normalized_tables.append(Table(
+                headers=["code", "sname", "tdate", "net_flow"],
+                rows=net_flow_rows
             ))
-            
-        session = Session(
-            session_id=session_id,
-            time="N/A",
-            participants = ["User", "Assistant"] if self.generate_pseudo_dialogue else ["Assistant"],
-            turns=turns,
-            tables=table_objects
-        )
+        if outflow_rows:
+            normalized_tables.append(Table(
+                headers=["code", "sname", "tdate", "outflow"],
+                rows=outflow_rows
+            ))
         
-        return session
+        return normalized_tables
+
+    def _parse_and_standardize_value(self, value: Any) -> Any:
+        """
+        解析并标准化数值，处理货币和百分比单位。
+        将所有货币转换为“million”，百分比转换为小数。
+        """
+        if not isinstance(value, str):
+            return value
+
+        original_value_str = value.strip()
+
+        # Handle percentage
+        percentage_match = self.percentage_pattern.match(original_value_str)
+        if percentage_match:
+            try:
+                return float(percentage_match.group(1)) / 100.0
+            except ValueError:
+                self.logger.warning(f"无法解析百分比: {original_value_str}")
+                return original_value_str
+
+        # Handle currency
+        currency_match = self.currency_pattern.match(original_value_str)
+        if currency_match:
+            try:
+                num_part = float(currency_match.group(1))
+                unit = currency_match.group(3)
+                if unit == "万元":
+                    return num_part
+                elif unit == "亿元":
+                    return num_part * 100.0
+                else: # "元"
+                    return num_part / 1000000.0
+            except ValueError:
+                self.logger.warning(f"无法解析货币: {original_value_str}")
+                return original_value_str
+
+        try:
+            return round(float(original_value_str),2)
+        except ValueError:
+            return original_value_str
+
+    def _table_to_evidences(self, table_objects: List[Table]) -> List[Evidence]:
+        """规范化表格 → 固定元组列表 (code, sname, date, value, flow_type)"""
+        evidences: List[Evidence] = []
+
+        for tbl in table_objects:
+            for row in tbl.rows:
+                code  = row.get("code",  "unknown")
+                sname = row.get("sname", "unknown")
+                date  = row.get("tdate", "unknown")
+
+                if "net_flow" in tbl.headers:
+                    val = float(row.get("net_flow", 0.0))
+                    evidences.append((code, sname, date, val, "net_flow"))
+
+                if "outflow" in tbl.headers:
+                    val = float(row.get("outflow", 0.0))
+                    evidences.append((code, sname, date, val, "outflow"))
+
+        return list(set(evidences))
 
     def load(self, file_path: str) -> ConversationDataset:
         """加载BizFinBench数据集文件并转换为ConversationDataset"""
@@ -160,7 +277,7 @@ class BizFinLoader:
                 for line in f:
                     data_lines.append(json.loads(line))
             
-            # 处理每个样本
+            # 处理每个样本，将它们组合成对话
             conversations = []
             for group_idx in range(0, len(data_lines), self.combine_size):
                 group_samples = data_lines[group_idx:group_idx+self.combine_size]
@@ -215,10 +332,25 @@ class BizFinLoader:
             json.dump(serialized, f, indent=2, ensure_ascii=False)
 
 def main():
+    import argparse
+    import time
+    from utils.logger import setup_logging
+    from utils.params import get_base_parser, data_loader_args
+    
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    os.environ['LOG_FILE'] = f"biz_loader_{timestamp}.log"
+    logger = setup_logging()
+    
+    # 参数解析
+    base_parser = get_base_parser()
+    parser = argparse.ArgumentParser(parents=[base_parser])
+    parser = data_loader_args(parser)
+    args = parser.parse_args()
+
     loader = BizFinLoader(model=args.model, 
-                        max_turns=args.max_turns, is_step= args.is_step,
-                        cache_dir=args.cache_dir, combine_size=args.combine_size,
-                        generate_pseudo_dialogue=args.generate_pseudo_dialogue)
+                          max_turns=args.max_turns, is_step= args.is_step,
+                          cache_dir=args.cache_dir, combine_size=args.combine_size,
+                          generate_pseudo_dialogue=args.generate_pseudo_dialogue)
     dataset = loader.load(args.input_data)
     
     # 保存处理后的数据集
@@ -229,16 +361,4 @@ def main():
     logger.info(f"处理后的数据已保存至: {output_path}")
 
 if __name__ == "__main__":
-    import argparse
-    from utils.logger import setup_logging
-    from utils.params import get_base_parser, data_loader_args
-    
-    logger = setup_logging()
-    
-    # 参数解析
-    base_parser = get_base_parser()
-    parser = argparse.ArgumentParser(parents=[base_parser])
-    parser = data_loader_args(parser)
-    args = parser.parse_args()
-    
     main()

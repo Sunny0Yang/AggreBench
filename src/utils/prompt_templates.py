@@ -2,78 +2,83 @@ from typing import Dict
 
 QA_GENERATION_PROMPTS: Dict[str, str] =({
     "structured_easy_template_en": """
-### Task: Generate Simple Aggregative Query Questions
+### Task: Generate Simple Aggregative Query Question
 Please generate a *simple, direct* aggregative query question based on the provided structured table data.
 This question should require a single, straightforward aggregation (e.g., COUNT, SUM, AVG, MAX, MIN) focusing on one specific column.
----
-### Available Information (Context for Question Generation)
-{session_context}
+### Available Information
+{{session_context}}
 
-### Generation Requirements:
-1.  **Core Operation**: MUST use a single aggregation function (COUNT, SUM, AVG, MAX, MIN).
-2.  **Scope**: Focus on one specific column, no complex filtering or joins required. Use a specific time scope instead of "in the given data" or "in the Table 0".
-3.  **Real-World Significance**: Questions should reveal direct facts or simple totals/averages from the data.
-4.  **Output Format**: Strict JSON only:
-{{
-    "question": "Question text",
-    "answer": "The answer is: [numeric value or concise response]", # MUST start with "The answer is:"
-    "evidence": ["<Identifier Column Name>: <Identifier Value>; <Target Column Name>: <Target Value>"] # List of strings, and exactly one target column each string.
-}}
-5.  **Evidence Requirements**:
-    - **CRITICAL: Evidence MUST be *necessary* to derive the answer, directly contain the data points used in the aggregation.**
-    - References MUST use "<Identifier Column Name>: <Identifier Value>; <Target Column Name>: <Target Value>" format.
-6.  **Answer Formatting**:
-    - MUST begin with "The answer is: "
-    - For numerical answers, please use base units (e.g., use '520000000 元' instead of '5.20 亿元'; use '0.25' instead of '25%%')
-    - Avoid explanations or justifications in the answer field.
----
-### Example:
-{{
-    "question": "What was the maximum capital outflow recorded for 万科A?",
-    "answer": "The answer is: 520000000 元",
-    "evidence": ["股票简称: 万科A; 资金流出[20231212]: 5.25亿元"]
-}}
+### Rules
+1. Operation: exactly one aggregate function.  
+2. Scope: single column + explicit date range (e.g. “Dec 1-7 2023”).  
+3. Output JSON only:
+{
+  "question": "...?",
+  "answer": <float | int>,
+  "evidence": [
+    ["code", "sname", "YYYY-MM-DD", value, "net_flow|outflow"],
+    ...
+  ]
+}
+4. Evidence must cover **all rows** used in the aggregation.  
+5. `answer` is the raw numeric result.  
+6. Keep units in evidence rows as-is; no additional text.
+
+### Example
+{
+  "question": "What was the total net capital flow for 同花顺 from Dec 1-7 2023?",
+  "answer": -156442.27,
+  "evidence": [
+    ["300033.SZ", "同花顺", "2023-12-01", 279000000.00, "net_flow"],
+    ["300033.SZ", "同花顺", "2023-12-04", 570000000.00, "net_flow"],
+    ["300033.SZ", "同花顺", "2023-12-05", 48141800.00, "net_flow"],
+    ["300033.SZ", "同花顺", "2023-12-06", 2435500.00, "net_flow"]
+  ]
+}
 """,
     
-"structured_medium_template_en": """
+    "structured_medium_template_en": """
 ### Task: Generate Medium Difficulty Aggregative Query Question
 Please generate an aggregative query question of *medium difficulty* based on the provided structured table data.
 This question should involve either:
 - A two-step aggregation (e.g., AVG requires SUM and COUNT implicitly).
 - Aggregation on one column with simple filtering conditions.
 - Simple comparison between two aggregated values from the same table.
----
-### Available Information (Context for Question Generation)
-{session_context}
 
-### Generation Requirements:
-1.  **Core Operation**: MUST use a two-step aggregation (e.g., AVG implies SUM and COUNT) OR a single aggregation with simple filtering (e.g., COUNT WHERE X > Y).
-2.  **Scope**: Involve one column with 1-2 simple filtering conditions, or direct comparison of two aggregated results from the same table. No complex joins across multiple implicit "tables".
-3.  **Real-World Significance**: Questions should reveal insights that require a bit more processing than direct lookup, but are still straightforward.
-4.  **Output Format**: Strict JSON only:
-{{
-    "question": "Question text", # MUST NOT infer 'provided data' or 'Table 0' or something like this in the question.
-    "answer": "The answer is: [numeric value]",
-    "evidence": ["<Identifier Column Name>: <Identifier Value>; <Target Column Name>: <Target Value>;" ...] # List of strings, and exactly one target column each string
-}}
-5.  **Evidence Requirements**:
-    - **CRITICAL: Evidence MUST be *necessary* to derive the answer, directly contain the data points used in the aggregation.**
-    - References MUST use "<Identifier Column Name>: <Identifier Value>; <Target Column Name>: <Target Value>" format.
-6.  **Answer Formatting**:
-    - MUST begin with "The answer is: "
-    - For numerical answers, please use base units (e.g., use '520000000 元' instead of '5.20 亿元'; use '0.25' instead of '25%%')
-    - Avoid explanations or justifications in the answer field.
+### Context
+{{session_context}}
 
-### Example:
-{{
-    "question": "What is the average daily capital inflow for 同花顺 (300033.SZ) in the first week of December 2023 (Dec 1st to Dec 7th)?",
-    "answer": "The answer is: 263435420.0",
-    "evidence": [
-        "股票简称: 同花顺; 资金流向[20231201]: 2.79亿元",
-        "股票简称: 同花顺; 资金流向[20231204]: 5.70亿元",
-        "股票简称: 同花顺; 资金流向[20231205]: 4814.18万元"
-    ]
-}}
+### Available Information
+{{session_context}}
+
+### Rules
+1. Operation: exactly one aggregate function.  
+2. Scope: single column + explicit date range (e.g. “Dec 1-7 2023”).  
+3. Output JSON only:
+{
+  "question": "...?",
+  "answer": <float | int>,
+  "evidence": [
+    ["code", "sname", "YYYY-MM-DD", value, "net_flow|outflow"],
+    ...
+  ]
+}
+4. Evidence must cover **all rows** used in the aggregation.  
+5. `answer` is the raw numeric result.  
+6. Keep units in evidence rows as-is; no additional text.
+
+### Example
+{
+  "question": "What is the average daily net capital flow for 同花顺 from Dec 1-7 2023?",
+  "answer": -22348.90,
+  "evidence": [
+    ["300033.SZ", "同花顺", "2023-12-01", -225000000.00, "net_flow"],
+    ["300033.SZ", "同花顺", "2023-12-04", -110000000.00, "net_flow"],
+    ["300033.SZ", "同花顺", "2023-12-05", -486858200.00, "net_flow"],
+    ["300033.SZ", "同花顺", "2023-12-06", -378564500.00, "net_flow"],
+    ["300033.SZ", "同花顺", "2023-12-07", -364000000.00, "net_flow"]
+  ]
+}
 """,
     
     "structured_hard_template_en": """
@@ -85,41 +90,41 @@ This question should require:
 - Time-based analysis or comparisons (e.g., year-over-year growth, trends over periods).
 - Potentially combine information from multiple conceptual "tables" if the context implies them (e.g., different sections of the data representing different entities or timeframes that need to be linked).
 ---
-### Available Information (Context for Question Generation)
-{session_context}
+### Context
+{{session_context}}
 
-### Generation Requirements:
-1.  **Core Operation**: MUST involve multi-step aggregation (e.g., nested calculations like "average of daily sums", or calculations across multiple related columns).
-2.  **Scope**: Combine multiple columns, potentially requiring implicit joins or complex logical deductions.
-3.  **Time Dimension**: MUST include time-based filtering, comparisons, or trend analysis.
-4.  **Real-World Significance**: Questions should reveal complex trends, anomalies, or strategic insights that require advanced data manipulation.
-5.  **Output Format**: Strict JSON only:
-{{
-    "question": "Question text", # MUST NOT infer 'provided data' or 'Table 0' or something like this in the question.
-    "answer": "The answer is: [numeric value]",
-    "evidence": ["<Identifier Column Name>: <Identifier Value>; <Target Column Name>: <Target Value>;" ...] # List of strings, and exactly one target column each string
-}}
-6.  **Evidence Requirements**:
-    - **CRITICAL: Evidence MUST be *necessary* to derive the answer, directly contain the data points used in the aggregation.**
-    - References MUST use "<Identifier Column Name>: <Identifier Value>; <Target Column Name>: <Target Value>" format.
-7.  **Answer Formatting**:
-    - MUST begin with "The answer is: "
-    - For numerical answers, please use base units (e.g., use '520000000 元' instead of '5.20 亿元'; use '0.25' instead of '25%%')
-    - Avoid explanations or justifications in the answer field.
+### Available Information
+{{session_context}}
 
-### Example:
-{{
-    "question": "Calculate the percentage change in net capital flow (inflow minus outflow) from December 1–7 to December 25–31, 2023 and report the single rounded-to-two-decimals figure?",
-    "answer": "The answer is: 0.36",
-    "evidence": [
-        "股票简称: 同花顺; 资金流向[20231201]: 2.79亿元",
-        "股票简称: 同花顺; 资金流出[20231201]: 5.04亿元",
-        "股票简称: 同花顺; 资金流向[20231204]: 5.70亿元",
-        "股票简称: 同花顺; 资金流出[20231204]: 6.80亿元",
-        "股票简称: 同花顺; 资金流向[20231222]: -112451513.00元",
-        "股票简称: 同花顺; 资金流出[20231222]: 4.29亿元"
-    ]
-}}
+### Rules
+1. Operation: exactly one aggregate function.  
+2. Scope: single column + explicit date range (e.g. “Dec 1-7 2023”).  
+3. Output JSON only:
+{
+  "question": "...?",
+  "answer": <float | int>,
+  "evidence": [
+    ["code", "sname", "YYYY-MM-DD", value, "net_flow|outflow"],
+    ...
+  ]
+}
+4. Evidence must cover **all rows** used in the aggregation.  
+5. `answer` is the raw numeric result.  
+6. Keep units in evidence rows as-is; no additional text.
+
+### Example
+{
+  "question": "Calculate the percentage change in total net capital flow for 同花顺 from Dec 1-7 to Dec 22-28 2023 (rounded to two decimals).",
+  "answer": 118.68,
+  "evidence": [
+    ["300033.SZ", "同花顺", "2023-12-01", -225000000.00, "net_flow"],
+    ["300033.SZ", "同花顺", "2023-12-04", -110000000.00, "net_flow"],
+    ["300033.SZ", "同花顺", "2023-12-05", -486858200.00, "net_flow"],
+    ["300033.SZ", "同花顺", "2023-12-06", -378564500.00, "net_flow"],
+    ["300033.SZ", "同花顺", "2023-12-07", -364000000.00, "net_flow"],
+    ["300033.SZ", "同花顺", "2023-12-22", -342013070.00, "net_flow"]
+  ]
+}
 """,
 
 "sql_prompt_template": """
@@ -184,68 +189,65 @@ The communication style tends to be **pragmatic and inquisitive**, frequently in
 
 SESSION_SIMULATOR_PROMPT: Dict[str, str] = ({
     "user": """
-You are acting as a normal user chatting with a professional AI assistant about financial data.
-Your overarching goal is to ensure a **complete and thorough discussion** of **ALL** the financial data/information that still needs to be covered.
+You are acting as a normal user chatting with a professional AI assistant about financial data. 
+Your overarching goal is to ensure a **complete and thorough discussion** of **ALL** the financial data that still needs to be covered.
 
-Here is the list of **Remaining Undiscussed Financial Data/Information** for this session. You must ensure all items on this list are introduced and discussed before the conversation ends:
+Remaining **Un-discussed Financial Data** for this session (values are in RMB million): 
 {evidences}
-
-Based on your persona and the "Remaining Undiscussed Financial Data/Information" list, decide your next action:
-
-**Decision-making process:**
-1.  **Review the `Remaining Undiscussed Financial Data/Information`:** Identify which specific data points have NOT yet been meaningfully addressed. Your primary goal is to bring these into the conversation.
-2.  **Formulate your response:** Your highest priority is to **naturally introduce one or more of these undiscussed data points** into the conversation. Choose ONE of the following approaches:
-
-    * **Option 1 (Present Data and Ask for Analysis):** Select **a coherent group (close to 8 points each)** of undiscussed data points from the `Remaining Undiscussed Financial Data/Information` list. Explicitly state this data in your message, then ask the assistant for analysis or interpretation related to it.
-        * **Example (a group of related data points):** "对于这个数据：“同花顺(300033.SZ) 在2023年12月1日到12月5日的资金流向数据：12月1日流向 2.79亿元，12月4日流向 5.70亿元，12月5日流向 4814.18万元”。["Question text" like “根据这些数据判断同花顺股票值得购买吗？”“请你预测接下来的流入？]"
-
-    * **Option 2 (Query for Data and Information):** Ask a specific question or make a request that requires the assistant to retrieve and provide one or more undiscussed data points from the `Remaining Undiscussed Financial Data/Information` list. Your query should be clear enough for the assistant to identify the relevant data.
-        * **Example (specific query):** "同花顺(300033.SZ) 2023年12月1日到12月10日的资金流向数据是多少？"
-        * **Example (general query leading to specific data):** "我想了解同花顺(300033.SZ) 近期的资金流出情况，能提供一下吗？"
-
-Ensure your message is concise (1-2 simple sentences); real users often do not bother writing a long message.
-You must simulate the tone of a neutral user with following persona and do not be overly enthusiastic, verbose, formal, or polite.
-For conciseness, DO NOT react to the assistant’s message with e.g., ”thanks” or ”I will do that”.
-Instead, directly state the follow-up questions or new questions.
-
-Persona: {persona}
-Chat History:
-{chat_history}
 
 ---
-**CRITICAL INSTRUCTION FOR EVIDENCE TRACKING:**
-After your response, if you have explicitly mentioned or used any data from the "Remaining Undiscussed Financial Data/Information" list, you MUST list the **EXACT ORIGINAL STRINGS** of those evidences under the following fixed header. This part will NOT be part of the chat history.
+
+Decision-making process 
+1. Review the list above and pick **one coherent group** (≈8 points) **or** a specific query. 
+2. Formulate a **concise** follow-up (1–2 sentences). 
+3. Tone: neutral, casual, not overly polite. 
+4. **After your message**, list every **exact original tuple evidence** you just referenced under 
+ `EVIDENCES_USED_IN_THIS_TURN:` (this block is **not** part of chat history).
+
+Past Conversation Summary: 
+{summary_of_past_conversation}
+
+Last Turn: 
+{last_turn_content}
+
+Example for Option 1 (present data + ask): 
+"I've been looking at 同花顺 (300033.SZ)'s capital flow data for December 2023. For example, on Dec 1st, there was an inflow of RMB 279 million, followed by RMB 570 million on Dec 4th, and RMB 456 million on Dec 8th. However, the trend shifted, with an outflow of RMB 148.58 million on Dec 13th, and RMB 212.77 million on Dec 14th. What's your analysis of these fluctuations and their potential impact?"
+
+Example of EVIDENCES_USED_IN_THIS_TURN:
+- ('300033.SZ', '同花顺', '2023-12-01', 279.0, 'net_flow')
+- ('300033.SZ', '同花顺', '2023-12-04', 570.0, 'net_flow')
+
+Persona: {persona} 
+
 EVIDENCES_USED_IN_THIS_TURN:
-- [Exact original evidence string 1]
-- [Exact original evidence string 2]
-...
+- [tuple evidence 1]
+- [tuple evidence 2]
 """,
     "assistant": """
-You are a professional and helpful AI assistant, specializing in financial topics. Your primary goal is to provide accurate, concise, and useful information or assistance to the user, and to ensure a **complete and comprehensive discussion** of **ALL** the financial data/information that still needs to be covered.
+You are a professional AI assistant specialized in finance. 
+Your goal is to answer concisely and **ensure every remaining data point is eventually discussed**.
 
-Here is the list of **Remaining Undiscussed Financial Data/Information** for this session. You should refer to this list when providing information that has not yet been discussed:
+Remaining **Un-discussed Financial Data**: 
 {evidences}
 
-Your tasks are:
-**Decision-making process:**
-1.  **Analyze User's Latest Input (`User's Latest Input`):**
-    * **If the user provides data and asks for analysis (e.g., lists specific data points and asks "What's your analysis?"):** Prioritize directly answering their analysis question based on the data they provided.
-    * **If the user queries for data (e.g., asks "Could you tell me X data?" or "What is Y?"):** Prioritize retrieving and providing the most relevant undiscussed data points from the `Remaining Undiscussed Financial Data/Information` list that answer their query. Present this data clearly.
-2.  **After responding to the user's direct query or fulfilling their request:** If there are still **remaining undiscussed data points**, and it's natural to do so, proactively suggest further discussion or introduce another relevant undiscussed data point to ensure all information is covered by the end of the session.
+---
 
-Always maintain a helpful, clear, and professional tone. Avoid overly casual language or emojis.
+Decision-making process 
+1. **If the user supplied data** → analyse directly. 
+2. **If the user requested data** → retrieve and present the relevant **tuple evidences** from the list. 
+3. **After answering**, proactively surface any **still-un-discussed tuple evidences** when natural. 
+4. Keep tone professional and succinct.
 
-Current Chat History:
-{chat_history}
+Past Conversation Summary: 
+{summary_of_past_conversation}
+
+Last Turn: 
+{last_turn_content}
 
 User's Latest Input: {user_input}
 
----
-**CRITICAL INSTRUCTION FOR EVIDENCE TRACKING:**
-After your response, if you have explicitly mentioned or used any data from the "Remaining Undiscussed Financial Data/Information" list, you MUST list the **EXACT ORIGINAL STRINGS** of those evidences under the following fixed header. This part will NOT be part of the chat history.
 EVIDENCES_USED_IN_THIS_TURN:
-- [Exact original evidence string 1]
-- [Exact original evidence string 2]
-...
+- [tuple evidence 1]
+- [tuple evidence 2]
 """
 })

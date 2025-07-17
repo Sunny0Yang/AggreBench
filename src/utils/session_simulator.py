@@ -1,22 +1,17 @@
 # utils/session_simulator.py
 import os
 import json
+import ast
 import re
 import hashlib
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 from pathlib import Path
 from utils.prompt_templates import SESSION_SIMULATOR_PROMPT
 from client.llm_client import client
 from utils.cache_manager import DialogCacheManager
+from utils.struct import Evidence
 
-# 配置logger，日志保存到dialog_simulator.log文件
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    filename='dialog_simulator.log',
-    filemode='a'
-)
 logger = logging.getLogger(__name__)
 
 class SessionSimulator:
@@ -41,12 +36,12 @@ class SessionSimulator:
         self.current_dialog: List[Dict] = []
 
     def generate_dialog(self,
-                        evidences: List[str],
+                        evidences: List[Evidence],
                         persona: str) -> List[Dict]:
         """
         生成伪对话
 
-        :param evidences: 证据字符串列表，用户 LLM 需要在会话中透露出来的信息
+        :param evidences: 证据列表，用户 LLM 需要在会话中透露出来的信息
         :param persona: 用户人格描述
         :return: 对话回合列表
         """
@@ -56,6 +51,19 @@ class SessionSimulator:
         # Get initial state and dialog from cache
         self.current_state = self.cache_manager.get_session_state()
         self.current_dialog = self.cache_manager.get_dialog_history()
+
+        # FIX: Ensure evidences and remaining_evidences are tuples after loading from cache
+        # JSON serialization converts tuples to lists. Convert them back to tuples for proper hashing.
+        if "evidences" in self.current_state and isinstance(self.current_state["evidences"], list):
+            self.current_state["evidences"] = [
+                tuple(item) if isinstance(item, list) else item
+                for item in self.current_state["evidences"]
+            ]
+        if "remaining_evidences" in self.current_state and isinstance(self.current_state["remaining_evidences"], list):
+            self.current_state["remaining_evidences"] = [
+                tuple(item) if isinstance(item, list) else item
+                for item in self.current_state["remaining_evidences"]
+            ]
 
         # If cache was empty, initialize state and starting dialog
         if not self.current_state.get("session_hash"): # Check if it's a freshly initialized empty state
@@ -88,26 +96,42 @@ class SessionSimulator:
             # If enabled and not the very first turn (0), pause
             if self.is_step and current_turn > 0:
                 logger.info(f"\n--- 对话暂停，当前轮次: {current_turn}/{self.max_turns} ---")
-                logger.info(f"您可以修改缓存文件 {self.cache_manager.current_cache_path} 中的对话历史，然后按回车键继续...")
+                logger.info(f"您可以检查缓存文件 {self.cache_manager.current_cache_path} 中的对话历史，然后按回车键继续...")
                 input("（按回车键继续）")
                 # Reload cache to reflect potential manual changes
                 self.cache_manager.load_cache(evidences, persona)
-                # Update local state/dialog from reloaded cache
+                # FIX: Re-apply conversion after reloading cache
                 self.current_state = self.cache_manager.get_session_state()
                 self.current_dialog = self.cache_manager.get_dialog_history()
+                if "evidences" in self.current_state and isinstance(self.current_state["evidences"], list):
+                    self.current_state["evidences"] = [
+                        tuple(item) if isinstance(item, list) else item
+                        for item in self.current_state["evidences"]
+                    ]
+                if "remaining_evidences" in self.current_state and isinstance(self.current_state["remaining_evidences"], list):
+                    self.current_state["remaining_evidences"] = [
+                        tuple(item) if isinstance(item, list) else item
+                        for item in self.current_state["remaining_evidences"]
+                    ]
                 logger.info("继续对话...")
-            if self.current_state["remaining_evidences"] == []:
+            
+            # Check if all evidences have been discussed before generating next turn
+            if not self.current_state["remaining_evidences"]:
                 logger.info("所有信息都已被提及，对话结束。")
                 break
-            # 将当前对话历史转换为适合 LLM prompt 的字符串格式
-            # 使用列表存储 Dict 结构的好处是方便序列化（json）和反序列化
-            # 在转换为 prompt 时再进行格式化
-            chat_history_str = self._format_chat_history(self.current_dialog)
             
+            # --- Prepare context for User LLM ---
+            # Summarize history up to the last assistant turn (inclusive of initial greeting)
+            summary_for_user_prompt = self._summarize_chat_history(self.current_dialog) 
+            last_turn_for_user_prompt = ""
+            if self.current_dialog:
+                last_turn_for_user_prompt = f"{self.current_dialog[-1]['speaker']}: {self.current_dialog[-1]['content']}"
+
             user_prompt = SESSION_SIMULATOR_PROMPT["user"].format(
-                evidences="\n".join(f"- {e}" for e in self.current_state["remaining_evidences"]),
+                evidences="\n".join(f"- {e}" for e in self.current_state["remaining_evidences"]), # `e` is already a tuple representation as a string
                 persona=self.current_state["persona"],
-                chat_history=chat_history_str
+                summary_of_past_conversation=summary_for_user_prompt,
+                last_turn_content=last_turn_for_user_prompt
             )
             if current_turn == self.max_turns - 1 and self.current_state["remaining_evidences"]:
                 user_prompt += "\nCRITICAL: Final turn - MUST cover ALL remaining evidence in one response"
@@ -123,13 +147,22 @@ class SessionSimulator:
                 "content": user_response_content,
             })
 
+            # Update remaining evidences based on what user mentioned (which are now proper tuple objects)
             self.update_remaining_evidences(mentioned_by_user, 'user')
+
+            # --- Prepare context for Assistant LLM ---
+            # Summarize history up to (but not including) the latest user turn
+            summary_for_assistant_prompt = self._summarize_chat_history(self.current_dialog[:-1])
+            # The last turn for the assistant is the user's just generated response
+            last_turn_for_assistant_prompt = f"User: {user_response_content}"
 
             assistant_prompt = SESSION_SIMULATOR_PROMPT["assistant"].format(
                 evidences="\n".join(f"- {e}" for e in self.current_state["remaining_evidences"]),
-                chat_history=self._format_chat_history(self.current_dialog),
-                user_input=user_response_content
+                user_input=user_response_content, # Still useful as direct input
+                summary_of_past_conversation=summary_for_assistant_prompt,
+                last_turn_content=last_turn_for_assistant_prompt
             )
+            logger.debug(f"assistant_prompt: {assistant_prompt}")
             logger.info(f"\n--- Assistant LLM (Turn {current_turn + 1}) ---")
             assistant_response_raw = self._llm_generate([{"role": "user", "content": assistant_prompt}])
             assistant_response_content, mentioned_by_assistant = self._extract_and_clean_llm_response(assistant_response_raw)
@@ -140,6 +173,7 @@ class SessionSimulator:
                 "content": assistant_response_content,
             })
 
+            # Update remaining evidences based on what assistant mentioned
             self.update_remaining_evidences(mentioned_by_assistant,'assistant')
             
             self.current_state["turn_count"] += 1
@@ -162,38 +196,40 @@ class SessionSimulator:
             for chunk in completion:
                 if chunk.choices[0].delta.content:
                     response_content += chunk.choices[0].delta.content
-            logger.info(f"API response: {response_content}")
+            logger.debug(f"API response: {response_content}")
             return response_content
         except Exception as e:
             logger.error(f"LLM 调用失败: {e}")
             return "对不起，我暂时无法回应。"
 
-    def _extract_and_clean_llm_response(self, raw_llm_response: str) -> Tuple[str, List[str]]:
+    def _extract_and_clean_llm_response(self, raw: str) -> Tuple[str, List[Evidence]]:
         """
-        从原始 LLM 响应中提取标记的证据列表，并返回清理后的响应内容。
-        Args:
-            raw_llm_response: LLM 返回的原始字符串，可能包含证据标记部分。
-        Returns:
-            Tuple[str, List[str]]: 清理后的对话内容字符串 和 被标记的证据列表。
+        清理对话内容 + 把 LLM 标记的证据解析成 Evidence 元组
         """
         pattern = r"EVIDENCES_USED_IN_THIS_TURN:\s*\r?\n(.*?)(?=\r?\n---|$)"
-        match = re.search(pattern, raw_llm_response, re.DOTALL)
-    
-        mentioned_evidences = []
-        dialog_content = raw_llm_response
-    
+        match = re.search(pattern, raw, re.DOTALL)
+
+        content = raw
+        evidences: List[Evidence] = []
         if match:
-            evidences_block = match.group(1).strip()
-            # 移除证据标记部分，得到真正的对话内容
-            dialog_content = raw_llm_response[:match.start()].strip()
-    
-            # 从证据块中提取每个证据字符串
-            for line in evidences_block.splitlines():
+            # Content is everything before the EVIDENCES_USED_IN_THIS_TURN block
+            content = raw[:match.start()].strip()
+            block = match.group(1).strip()
+            for line in block.splitlines():
                 line = line.strip()
-                if line.startswith('- ') and len(line) > 2:
-                    mentioned_evidences.append(line[2:])  # 移除 "- " 前缀
-    
-        return dialog_content, mentioned_evidences
+                if line.startswith("- "):
+                    payload = line[2:].strip()
+                    try:
+                        # Directly evaluate the payload as a tuple
+                        parsed_item = ast.literal_eval(payload)
+                        # Ensure it's a tuple and has 5 elements as per Evidence type
+                        if isinstance(parsed_item, tuple) and len(parsed_item) == 5:
+                            evidences.append(parsed_item)
+                        else:
+                            logger.warning(f"Parsed item from LLM is not a 5-element tuple, skipping: {parsed_item}")
+                    except (ValueError, SyntaxError) as e:
+                        logger.warning(f"无法解析证据字符串 '{payload}': {e}")
+        return content, evidences
 
     def _format_chat_history(self, chat_history: List[Dict]) -> str:
         """
@@ -204,22 +240,51 @@ class SessionSimulator:
             formatted_history.append(f"{entry['speaker']}: {entry['content']}")
         return "\n".join(formatted_history)
 
-    def _filter_remaining_evidences(self, remaining_evidences: List[str], mentioned_evidences: List[str], role: str) -> List[str]:
-        filtered_evidences = []
-        for evidence in remaining_evidences:
-            matched = False
-            for mentioned in mentioned_evidences:
-                norm_evidence = re.sub(r"\s+", "", evidence).lower()
-                norm_mentioned = re.sub(r"\s+", "", mentioned).lower()
-                if norm_evidence in norm_mentioned or norm_mentioned in norm_evidence:
-                    matched = True
-                    break
-            if not matched:
-                filtered_evidences.append(evidence)
-                logger.debug(f"{role} LLM 未标记提及信息: {evidence}")
+    def _summarize_chat_history(self, history_to_summarize: List[Dict]) -> str:
+        """
+        使用 LLM 总结对话历史。
+        """
+        if not history_to_summarize:
+            return "No prior conversation."
+        
+        # If only the initial assistant greeting, no meaningful conversation to summarize yet
+        if len(history_to_summarize) == 1 and history_to_summarize[0].get("speaker") == "Assistant" and history_to_summarize[0].get("content") == "Hi! How can I assist you today?":
+            return "Initial greeting."
+
+        # Create a formatted history string for summarization
+        formatted_history = self._format_chat_history(history_to_summarize)
+
+        # Define a prompt for summarization
+        summarization_prompt = f"""
+Please concisely summarize the following conversation history. Focus on key topics discussed, questions asked by the user, and answers provided by the assistant.
+The summary should be brief and capture the essence of the exchange.
+
+Conversation History:
+{formatted_history}
+
+Summary:
+"""
+        logger.debug(f"Summarization prompt: {summarization_prompt}")
+        try:
+            summary_response = self._llm_generate([{"role": "user", "content": summarization_prompt}])
+            cleaned_summary = summary_response.strip()
+            # If the summary is too short or generic, provide a default to avoid unnecessary tokens
+            if len(cleaned_summary) < 10 and not cleaned_summary.lower().startswith("no"):
+                return "Past conversation details."
+            return cleaned_summary
+        except Exception as e:
+            logger.error(f"Error summarizing chat history: {e}")
+            return "Failed to summarize past conversation."
+
+    def _filter_remaining_evidences(self, remaining_evidences: List[Evidence], mentioned_evidences: List[Evidence], role: str) -> List[Evidence]:
+        mentioned_set = set(mentioned_evidences)
+        filtered = [ev for ev in remaining_evidences if ev not in mentioned_set]
+        for ev in remaining_evidences:
+            if ev in mentioned_set:
+                logger.info(f"{role} marked: {ev}")
             else:
-                logger.info(f"{role} LLM 已标记提及信息: {evidence}")
-        return filtered_evidences
+                logger.debug(f"{role} missed: {ev}")
+        return filtered
 
     def update_remaining_evidences(self, mentioned: List[str], role:str):
         self.current_state["remaining_evidences"] = self._filter_remaining_evidences(
