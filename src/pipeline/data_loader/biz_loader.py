@@ -95,7 +95,8 @@ class BizFinLoader:
                 turns.append(MultiModalTurn(
                     turn_id=f"{session_id}_turn_{turn_idx+1}",
                     speaker=turn["speaker"],
-                    content=turn["content"]
+                    content=turn["content"],
+                    evidence=turn["mentioned_evidence"]
                 ))
         else:
             # 如果不需要伪对话，添加简单的表头信息（基于规范化后的表格）
@@ -318,7 +319,8 @@ class BizFinLoader:
                     "turns": [{
                         "turn_id": turn.id,
                         "speaker": turn.speaker,
-                        "content": turn.content
+                        "content": turn.content,
+                        "mentioned_evidence": turn.mentioned_evidence,
                     } for turn in session.turns],
                     "tables": [{
                         "headers": table.headers,

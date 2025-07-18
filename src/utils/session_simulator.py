@@ -81,6 +81,7 @@ class SessionSimulator:
                     "id": 1,
                     "speaker": "Assistant",
                     "content": "Hi! How can I assist you today?",
+                    "mentioned_evidence": [],
                 }
             ]
             self.cache_manager.update_cache_data(self.current_state, self.current_dialog) # Save initial state
@@ -145,6 +146,7 @@ class SessionSimulator:
                 "id": len(self.current_dialog) + 1,
                 "speaker": "User",
                 "content": user_response_content,
+                "mentioned_evidence": mentioned_by_user,
             })
 
             # Update remaining evidences based on what user mentioned (which are now proper tuple objects)
@@ -171,6 +173,7 @@ class SessionSimulator:
                 "id": len(self.current_dialog) + 1,
                 "speaker": "Assistant",
                 "content": assistant_response_content,
+                "mentioned_evidence": mentioned_by_assistant,
             })
 
             # Update remaining evidences based on what assistant mentioned

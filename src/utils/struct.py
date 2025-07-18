@@ -13,7 +13,7 @@ class DialogueTurn:
 # 扩展的对话回合表示
 class MultiModalTurn:
     def __init__(self, turn_id, speaker, content, 
-                 img_urls=None, blip_caption=None, query=None):
+                 img_urls=None, blip_caption=None, query=None, evidence=None):
         self.id = turn_id
         self.speaker = speaker
         self.text_content = content  # 原始文本内容
@@ -22,6 +22,7 @@ class MultiModalTurn:
         self.query = query  # 搜索查询词
         # 生成综合内容（文本+图片描述(no url)）
         self.content = self._generate_combined_content()
+        self.mentioned_evidence = evidence
     
     def _generate_combined_content(self) -> str:
         """生成组合文本内容，融合多模态信息"""
