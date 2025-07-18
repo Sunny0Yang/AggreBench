@@ -11,7 +11,7 @@ from utils.params import get_base_parser, qa_generation_args
 from utils.logger import setup_logging
 from utils.prompt_templates import QA_GENERATION_PROMPTS
 from client.llm_client import client
-from utils.struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset, load_data, save_results
+from utils.struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset, Evidence, load_data, save_results
 from utils.cache_manager import QACacheManager, DifficultyLevel
 from utils.sql_engine import SqlEngine
 from utils.validator import Validator
@@ -64,11 +64,11 @@ class QuestionGenerator:
                     [qa for qa in self.cache_manager.get_all_qas(difficulty=difficulty) 
                      if qa.get("conversation_id") == conversation.id and qa.get("status") in ["liked", "generated"]]
                 )
-                
+
                 if generated_count_for_current_difficulty >= num_qa_for_difficulty:
                     self.logger.info(f"Skipping generation for '{difficulty}' difficulty as already generated {generated_count_for_current_difficulty}/{num_qa_for_difficulty} QAs.")
                     continue
-                
+
                 while generated_count_for_current_difficulty < num_qa_for_difficulty:
                     qa_dict, _ = self._generate_single_qa(conversation)
                     if qa_dict:
@@ -84,11 +84,11 @@ class QuestionGenerator:
         """
         # 从conversation中随机选择会话
         session_count = random.randint(
-            self.min_sessions,
-            min(self.max_sessions, len(conversation.sessions))
+            self.min_sessions, min(self.max_sessions, len(conversation.sessions))
         )
         selected_sessions = random.sample(conversation.sessions, session_count)
         selected_sessions.sort(key=lambda s: s.id)
+
         # Prepare context for LLM
         session_context = self._build_session_context(selected_sessions)
         
@@ -97,9 +97,8 @@ class QuestionGenerator:
         preferred_qas = self.cache_manager.get_preferred_qas(self.difficulty)
         # negative examples (status="disliked")
         disliked_qas = self.cache_manager.get_disliked_qas(self.difficulty)
-
         additional_guidance = self._build_additional_guidance(
-            preferred_qas=preferred_qas, 
+            preferred_qas=preferred_qas,
             disliked_qas=disliked_qas
         )
 
@@ -107,12 +106,12 @@ class QuestionGenerator:
         if not qa_response:
             self.logger.warning("LLM did not return a valid response.")
             return None, None
-        
+
         qa_dict = self._parse_llm_response(qa_response)
         if not qa_dict:
             self.logger.warning("Failed to parse LLM response into a QA dictionary.")
             return None, None
-        
+
         # Add conversation-specific and global metadata
         qa_dict["conversation_id"] = conversation.id
         qa_dict["session_ids"] = [s.id for s in selected_sessions]
@@ -124,8 +123,7 @@ class QuestionGenerator:
             print("\n--- Step-by-step mode: New QA Generated. ---")
             print(f"Question: {qa_dict.get('question_text')}")
             print(f"\n请检查这次生成的问题。输入 'y' 标记为【偏好问题】（保存进数据集）；输入 'n' 标记为【不喜欢】（保存进cache），并重新生成；输入 'r' 重新生成（不保存进cache）；按回车键标记为【已生成】（保存进数据集）。")
-            char = input("输入 'y', 'n', 'r'或回车键继续...\n").strip().lower() 
-            
+            char = input("输入 'y', 'n', 'r'或回车键继续...\n").strip().lower()
             if char == "y":
                 self.cache_manager.add_qa(qa_dict, status="liked")
                 self.cache_manager.save_cache()
@@ -154,17 +152,25 @@ class QuestionGenerator:
         context = ""
         for session in sessions:
             context += f"### Session ID: {session.id}\n"
-            
             if session.tables:
                 self.logger.debug(f"会话 {session.id} 构建表格上下文")
                 context += "Data Type: Structured Table\n"
                 for idx, table in enumerate(session.tables):
-                    context += f"Table {idx}:\n"
+                    context += f"Table {idx} (Headers: {', '.join(table.headers)}):\n"
                     for row_idx, row in enumerate(table.rows):
-                        identifier = row.get("股票简称") or row.get("股票代码") or f"Row {row_idx}"
-                        context += f"  Entity: {identifier}\n"
-                        for k, v in row.items():
-                            context += f"    {k}: {v}\n"
+                        row_values = []
+                        for header in table.headers:
+                            value = row.get(header, "")
+                            if header == "net_flow":
+                                row_values.append(str(float(value)))
+                                row_values.append("net_flow")
+                            elif header == "outflow":
+                                row_values.append(str(float(value)))
+                                row_values.append("outflow")
+                            else:
+                                row_values.append(str(value))
+                        row_tuple_str = "(" + ", ".join(repr(val) for val in row_values) + ")"
+                        context += f"  Row {row_idx}: {row_tuple_str}\n"
             else:
                 self.logger.debug(f"会话 {session.id} 构建对话上下文")
                 context += f"Time: {session.time}\n"
@@ -180,7 +186,6 @@ class QuestionGenerator:
         构建额外的指导信息，包含偏好问题、不偏好问题。
         """
         guidance = ""
-
         # Section 1: Crucial Instructions (Prioritize Uniqueness and Diversity)
         guidance += (
             "### IMPORTANT GENERATION GUIDELINES:\n"
@@ -206,10 +211,10 @@ class QuestionGenerator:
             )
             for idx, qa in enumerate(selected_preferred_qas):
                 guidance += f" Good Example {idx + 1}:\n"
-                guidance += f"  Question: {qa.get('question_text')}\n"
-                guidance += f"  Answer: {qa.get('answer_text')}\n"
+                guidance += f" Question: {qa.get('question_text')}\n"
+                guidance += f" Answer: {qa.get('answer_text')}\n"
                 guidance += "\n"
-        
+
         # Section 3: Disliked Questions (Negative Examples)
         selected_disliked_qas = random.sample(disliked_qas, min(len(disliked_qas), self.max_disliked_examples))
         if selected_disliked_qas:
@@ -221,41 +226,38 @@ class QuestionGenerator:
                 "Learn from their flaws to prevent similar mistakes in your new questions.\n"
             )
             for idx, qa in enumerate(selected_disliked_qas):
-                guidance += f"  Bad Example {idx + 1}:\n"
-                guidance += f"    Question: {qa.get('question_text', 'N/A')}\n"
-            guidance += "\n"
-            
+                guidance += f" Bad Example {idx + 1}:\n"
+                guidance += f" Question: {qa.get('question_text', 'N/A')}\n"
+                guidance += "\n"
         return guidance
 
     def _generate_llm_qa(self, session_context: str, additional_guidance: str) -> str:
         """生成单个QA对"""
         is_structured = "structured table" in session_context.lower()
-        
         if is_structured:
             prompt_template_key = f"structured_{self.difficulty}_template_en"
             system_role = "You are a structured data analyst specializing in generating aggregation queries on structured tables."
         else:
             prompt_template_key = f"conversational_{self.difficulty}_template_en"
             system_role = "You are a conversation analyst specializing in generating aggregation queries on conversational data."
-        
+
         if prompt_template_key not in QA_GENERATION_PROMPTS:
             self.logger.warning(f"未找到模板 '{prompt_template_key}'，使用默认模板")
             prompt_template_key = "structured_medium_template_en" if is_structured else "conversational_medium_template_en"
-        
         prompt = QA_GENERATION_PROMPTS[prompt_template_key].format(
             session_context=session_context,
             session_threshold=self.session_threshold,
             min_evidences=self.min_evidences,
             max_evidences=self.max_evidences
         )
-
         if additional_guidance:
             prompt += additional_guidance
-        self.logger.debug(f"Prompt for difficulty '{self.difficulty}': {prompt}")
+
         messages = [
             {"role": "system", "content": system_role},
             {"role": "user", "content": prompt},
         ]
+
         self.logger.info(f"正在为难度 '{self.difficulty}' 生成QA...")
         completion = client.chat.completions.create(
             model=self.model,
@@ -271,36 +273,58 @@ class QuestionGenerator:
         self.logger.debug(f"API response: {response_content}")
         return response_content
 
-    def _parse_llm_response(self, response: str) -> Dict:
-        """解析LLM响应为结构化字典"""
+    def _parse_llm_response(self, response: str) -> Dict[str, Any]:
+        """
+        解析 LLM 返回的 JSON 字符串，返回结构化字典：
+        {
+            "question_text": str,
+            "answer_text": float | int,
+            "evidence": List[Tuple[str, str, str, float, str]]
+        }
+        """
         try:
-            temp = json.loads(response.strip())
-            if "question" in temp:
-                temp["question_text"] = temp.pop("question")
-            if "answer" in temp:
-                temp["answer_text"] = temp.pop("answer")
+            data = json.loads(response.strip())
 
-            if isinstance(temp.get("answer_text"), str):
-                s = temp["answer_text"]
-                m_pct = re.search(r"^The answer is:\s*(-?\d+(?:\.\d+)?)%", s)
-                if m_pct:
-                    temp["answer_text"] = float(m_pct.group(1)) / 100.0
+            question_text = data.pop("question", None)
+            answer_text   = data.pop("answer", None)
+
+            if isinstance(answer_text, str):
+                num_match = re.search(r"-?\d+(?:\.\d+)?", answer_text)
+                if num_match:
+                    answer_text = float(num_match.group(0))
                 else:
-                    m_num = re.search(r"^The answer is:\s*(-?\d+(?:\.\d+)?)", s)
-                    if m_num:
-                        temp["answer_text"] = float(m_num.group(1))
-                    else:
-                        temp["answer_text"] = s.replace("The answer is: ", "").strip()
-            if isinstance(temp.get("evidence"), list):
-                temp["evidence"] = [str(e).strip() for e in temp["evidence"]]
-            elif isinstance(temp.get("evidence"), str):
-                temp["evidence"] = [temp["evidence"].strip()]
+                    answer_text = 0.0
+            elif isinstance(answer_text, (int, float)):
+                answer_text = float(answer_text)
             else:
-                temp["evidence"] = ["Unknown evidence"]
+                answer_text = 0.0
 
-            return temp
+            raw_evi = data.get("evidence", [])
+            evidence: List[Tuple[str, str, str, float, str]] = []
+
+            for item in raw_evi:
+                if isinstance(item, list) and len(item) == 5:
+                    code, sname, tdate, val, flow_col = item
+                    evidence.append(
+                        (str(code), str(sname), str(tdate), float(val), str(flow_col))
+                    )
+                elif isinstance(item, str):
+                    try:
+                        parsed = json.loads(item)
+                        if isinstance(parsed, list) and len(parsed) == 5:
+                            code, sname, tdate, val, flow_col = parsed
+                            evidence.append(
+                                (str(code), str(sname), str(tdate), float(val), str(flow_col))
+                            )
+                    except Exception:
+                        continue
+            return {
+                "question_text": question_text,
+                "answer_text": answer_text,
+                "evidence": evidence
+            }
         except Exception as e:
-            self.logger.error(f"解析响应时发生错误: {e}.")
+            self.logger.error(f"解析响应时发生错误: {e}")
             return None
 
 class BatchValidator:
@@ -335,7 +359,13 @@ class BatchValidator:
         for qa_item in qas_to_validate:
             question = qa_item.get("question_text")
             answer_llm = qa_item.get("answer_text")
-            evidence_llm = qa_item.get("evidence")
+            # 列表转元组
+            raw_evi = qa_item.get("evidence")
+            if isinstance(raw_evi, list) and raw_evi and isinstance(raw_evi[0], list):
+                evidence_llm = [tuple(r) for r in raw_evi] 
+            else:
+                evidence_llm = []
+
             conversation_id = qa_item.get("conversation_id")
             session_ids = qa_item.get("session_ids")
 
@@ -377,7 +407,7 @@ class BatchValidator:
 
 
     def validate_and_correct(self, question: str, answer_llm: Any, 
-                             evidence_llm: List[str], sessions: List[Session]) -> Dict:
+                             evidence_llm: List[Evidence], sessions: List[Session]) -> Dict:
         """
         执行验证：LLM生成的SQL查询与数据库结果对比。
         """
@@ -423,12 +453,18 @@ class BatchValidator:
             
             # Execute evidence query
             evidence_results = self.sql_engine.execute_query(evidence_query)
-            self.logger.debug(f"Evidence SQL Result: {evidence_results}")
+            evidence_sql_rows: List[Evidence] = [
+                    (str(r["code"]), str(r["sname"]), str(r["tdate"]),
+                    float(r["value"]),
+                    str(r["suffix"]))
+                    for r in evidence_results
+                ]
+            self.logger.debug(f"Evidence SQL Result: {evidence_sql_rows}")
 
             # Perform two-stage validation
             self.logger.info(f"开始对比验证。")
             answer_match = self.validator.compare_answers(answer_llm, answer_sql)
-            evidence_match = self.validator.compare_evidence(evidence_llm, evidence_results)
+            evidence_match = self.validator.compare_evidence(evidence_llm, evidence_sql_rows)
 
             if answer_match and evidence_match:
                 result["sql_status"] = "match"
@@ -441,7 +477,7 @@ class BatchValidator:
                 result["sql_status"] = "; ".join(status_parts)
             
             result["sql_answer"] = answer_sql
-            result["sql_evidence"] = evidence_results
+            result["sql_evidence"] = evidence_sql_rows
 
         except Exception as e:
             self.logger.error(f"SQL验证失败: {e}", exc_info=True)
@@ -451,15 +487,27 @@ class BatchValidator:
         return result
 
     def _generate_sql_prompt(self, question: str, tables: List[Table]) -> str:
-        """生成用于SQL查询的提示词"""
-        context = ""
-        for i, table in enumerate(tables):
-            # Quote headers for SQL context
-            table_headers = [f'"{h}"' for h in table.headers]
-            context += f"Table_{i} (Columns: {', '.join(table_headers)}):\n"
-            if table.rows:
-                row_content = (',').join(f"{k}: {v}" for k, v in table.rows[0].items())
-                context += f"Sample Row: {row_content}\n"
+        from collections import defaultdict
+        suffix_to_rows: Dict[str, List[Dict]] = defaultdict(list)
+        for tbl in tables:
+            for row in tbl.rows:
+                suffix = "net_flow" if "net_flow" in row else "outflow"
+                suffix_to_rows[suffix].append(row)
+
+        context_lines = []
+        for suffix, rows in suffix_to_rows.items():
+            table_name = f"Table_{suffix}"
+            context_lines.append(
+                f'{table_name} (Columns: "code" TEXT, "sname" TEXT, "tdate" TEXT, "value" REAL):\n'
+            )
+            if rows:
+                # 只展示一行样本
+                sample = rows[0]
+                sample_str = ", ".join(f'{k}: {v}' for k, v in sample.items())
+                context_lines.append(f"Sample Row: {sample_str}\n")
+
+        context = "".join(context_lines)
+
         return QA_GENERATION_PROMPTS["sql_prompt_template"].format(
             question=question,
             tables=context
@@ -475,11 +523,15 @@ class BatchValidator:
             completion = client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                stream=False,
+                stream=True,
                 extra_body={"enable_thinking": False}
             )
-            self.logger.debug(f"LLM SQL response: {completion.choices[0].message.content}")
-            return completion.choices[0].message.content
+            response_content = ""
+            for chunk in completion:
+                if chunk.choices[0].delta.content:
+                    response_content += chunk.choices[0].delta.content
+            self.logger.debug(f"API response: {response_content}")
+            return response_content
         except Exception as e:
             self.logger.error(f"SQL生成失败: {e}")
             return None
@@ -565,7 +617,7 @@ def main():
         )
         
         qa_generator.batch_generate(dataset, difficulty_counts) 
-        
+
         # --- Second Stage: Validation (Optional) ---
         if args.enable_validation:
             logger.info("Enabling QA validation process.")

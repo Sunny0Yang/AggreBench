@@ -6,26 +6,26 @@ QA_GENERATION_PROMPTS: Dict[str, str] =({
 Please generate a *simple, direct* aggregative query question based on the provided structured table data.
 This question should require a single, straightforward aggregation (e.g., COUNT, SUM, AVG, MAX, MIN) focusing on one specific column.
 ### Available Information
-{{session_context}}
+{session_context}
 
 ### Rules
 1. Operation: exactly one aggregate function.  
 2. Scope: single column + explicit date range (e.g. “Dec 1-7 2023”).  
 3. Output JSON only:
-{
+{{
   "question": "...?",
   "answer": <float | int>,
   "evidence": [
-    ["code", "sname", "YYYY-MM-DD", value, "net_flow|outflow"],
+    ["code", "sname", "YYYY-MM-DD", <value>, "net_flow|outflow"],
     ...
   ]
-}
+}}
 4. Evidence must cover **all rows** used in the aggregation.  
 5. `answer` is the raw numeric result.  
-6. Keep units in evidence rows as-is; no additional text.
+6. Ensure each evidence entry is a **5-tuple** with a **float** numeric value.
 
 ### Example
-{
+{{
   "question": "What was the total net capital flow for 同花顺 from Dec 1-7 2023?",
   "answer": -156442.27,
   "evidence": [
@@ -34,7 +34,7 @@ This question should require a single, straightforward aggregation (e.g., COUNT,
     ["300033.SZ", "同花顺", "2023-12-05", 48141800.00, "net_flow"],
     ["300033.SZ", "同花顺", "2023-12-06", 2435500.00, "net_flow"]
   ]
-}
+}}
 """,
     
     "structured_medium_template_en": """
@@ -45,30 +45,27 @@ This question should involve either:
 - Aggregation on one column with simple filtering conditions.
 - Simple comparison between two aggregated values from the same table.
 
-### Context
-{{session_context}}
-
 ### Available Information
-{{session_context}}
+{session_context}
 
 ### Rules
 1. Operation: exactly one aggregate function.  
 2. Scope: single column + explicit date range (e.g. “Dec 1-7 2023”).  
 3. Output JSON only:
-{
+{{
   "question": "...?",
   "answer": <float | int>,
   "evidence": [
-    ["code", "sname", "YYYY-MM-DD", value, "net_flow|outflow"],
+    ["code", "sname", "YYYY-MM-DD", <value>, "net_flow|outflow"],
     ...
   ]
-}
+}}
 4. Evidence must cover **all rows** used in the aggregation.  
 5. `answer` is the raw numeric result.  
-6. Keep units in evidence rows as-is; no additional text.
+6. Ensure each evidence entry is a **5-tuple** with a **float** numeric value..
 
 ### Example
-{
+{{
   "question": "What is the average daily net capital flow for 同花顺 from Dec 1-7 2023?",
   "answer": -22348.90,
   "evidence": [
@@ -78,7 +75,7 @@ This question should involve either:
     ["300033.SZ", "同花顺", "2023-12-06", -378564500.00, "net_flow"],
     ["300033.SZ", "同花顺", "2023-12-07", -364000000.00, "net_flow"]
   ]
-}
+}}
 """,
     
     "structured_hard_template_en": """
@@ -90,30 +87,28 @@ This question should require:
 - Time-based analysis or comparisons (e.g., year-over-year growth, trends over periods).
 - Potentially combine information from multiple conceptual "tables" if the context implies them (e.g., different sections of the data representing different entities or timeframes that need to be linked).
 ---
-### Context
-{{session_context}}
 
 ### Available Information
-{{session_context}}
+{session_context}
 
 ### Rules
 1. Operation: exactly one aggregate function.  
 2. Scope: single column + explicit date range (e.g. “Dec 1-7 2023”).  
 3. Output JSON only:
-{
+{{
   "question": "...?",
   "answer": <float | int>,
   "evidence": [
-    ["code", "sname", "YYYY-MM-DD", value, "net_flow|outflow"],
+    ["code", "sname", "YYYY-MM-DD", <value>, "net_flow|outflow"],
     ...
   ]
-}
+}}
 4. Evidence must cover **all rows** used in the aggregation.  
 5. `answer` is the raw numeric result.  
-6. Keep units in evidence rows as-is; no additional text.
+6. Ensure each evidence entry is a **5-tuple** with a **float** numeric value.
 
 ### Example
-{
+{{
   "question": "Calculate the percentage change in total net capital flow for 同花顺 from Dec 1-7 to Dec 22-28 2023 (rounded to two decimals).",
   "answer": 118.68,
   "evidence": [
@@ -124,7 +119,7 @@ This question should require:
     ["300033.SZ", "同花顺", "2023-12-07", -364000000.00, "net_flow"],
     ["300033.SZ", "同花顺", "2023-12-22", -342013070.00, "net_flow"]
   ]
-}
+}}
 """,
 
 "sql_prompt_template": """
@@ -147,7 +142,7 @@ You are an advanced AI assistant specializing in generating precise SQL queries 
 
 5.  **Specifics for Evidence SQL Query (`SQL_EVIDENCE`):**
     * This query should retrieve the data points from the tables that serve as **direct evidence** for the answer.
-    * For each row selected as evidence, ensure you `SELECT` an (just pick one) **identifying column** (e.g., "股票简称") alongside the relevant evidence columns. This is essential for linking the evidence back to a specific entity.
+    * For each row selected as evidence, ensure you `SELECT` an entire row.
     * This query should ideally return the foundational facts or figures that lead to the answer.
     * Consider returning relevant columns from the rows that contain the key information.
 
@@ -170,10 +165,10 @@ Provide your response in the following format. Ensure there are no additional ex
 
 ```sql
 SQL_ANSWER:
-SELECT ... FROM ... WHERE ...;
+{{sql_text}};
 
 SQL_EVIDENCE:
-SELECT ... FROM ... WHERE ...;
+{{sql_text}};
 """
 })
 
