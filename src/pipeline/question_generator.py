@@ -343,18 +343,17 @@ class BatchValidator:
         """
         self.logger.info("Starting QA validation process.")
         
+        if is_step:
+            print("\n--- Step-by-step mode: QA Validation Preview. ---")
+            print(f"\n您可以检查缓存文件 {cache_manager.current_cache_path} ，然后按回车键继续...")
+            input("Press Enter to continue...")
+            cache_manager.load_cache() # Reload cache before validation step
         # Get all generated/liked QAs that haven't been successfully SQL verified
         qas_to_validate = [
             qa for qa in cache_manager.get_exportable_qas()
             if qa.get("sql_info", {}).get("sql_status") not in {"match", "skipped"}
         ]
         self.logger.info(f"Found {len(qas_to_validate)} QAs to validate.")
-
-        if is_step:
-            print("\n--- Step-by-step mode: QA Validation Preview. ---")
-            print(f"\n您可以检查缓存文件 {cache_manager.current_cache_path} ，然后按回车键继续...")
-            input("Press Enter to continue...")
-            cache_manager.load_cache() # Reload cache before validation step
 
         for qa_item in qas_to_validate:
             question = qa_item.get("question_text")
@@ -365,6 +364,7 @@ class BatchValidator:
                 evidence_llm = [tuple(r) for r in raw_evi] 
             else:
                 evidence_llm = []
+                self.logger.warning(f"Evidence for QA {qa_item.get('qa_id')} is not in the expected format.")
 
             conversation_id = qa_item.get("conversation_id")
             session_ids = qa_item.get("session_ids")
@@ -452,13 +452,14 @@ class BatchValidator:
             
             # Execute evidence query
             evidence_results = self.sql_engine.execute_query(evidence_query)
+            self.logger.debug(f"Evidence Raw SQL Result: {evidence_results}")
             evidence_sql_rows: List[Evidence] = [
                     (str(r["code"]), str(r["sname"]), str(r["tdate"]),
                     float(r["value"]),
                     str(r["suffix"]))
                     for r in evidence_results
                 ]
-            self.logger.debug(f"Evidence SQL Result: {evidence_sql_rows}")
+            self.logger.debug(f"Evidence SQL Rows: {evidence_sql_rows}")
 
             # Perform two-stage validation
             self.logger.info(f"开始对比验证。")
@@ -560,8 +561,6 @@ class BatchValidator:
         if not answer_sql or not evidence_sql:
             self.logger.error(f"未能解析LLM的SQL响应，格式不正确或缺少SQL。原始文本:\n{sql_text}")
             raise ValueError("未能解析LLM的SQL响应，格式不正确或缺少SQL。")
-        self.logger.debug(f"Parsed SQL - Answer: {answer_sql}")
-        self.logger.debug(f"Parsed SQL - Evidence: {evidence_sql}")    
         return answer_sql, evidence_sql
 
     def _clean_sql(self, sql_string: str) -> str:

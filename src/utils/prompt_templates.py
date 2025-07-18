@@ -5,7 +5,7 @@ QA_GENERATION_PROMPTS: Dict[str, str] =({
 ### Task: Generate Simple Aggregative Query Question
 Please generate a *simple, direct* aggregative query question based on the provided structured table data.
 This question should require a single, straightforward aggregation (e.g., COUNT, SUM, AVG, MAX, MIN) focusing on one specific column.
-### Available Information
+### Available Information(values are in RMB million)
 {session_context}
 
 ### Rules
@@ -45,7 +45,7 @@ This question should involve either:
 - Aggregation on one column with simple filtering conditions.
 - Simple comparison between two aggregated values from the same table.
 
-### Available Information
+### Available Information(values are in RMB million)
 {session_context}
 
 ### Rules
@@ -88,7 +88,7 @@ This question should require:
 - Potentially combine information from multiple conceptual "tables" if the context implies them (e.g., different sections of the data representing different entities or timeframes that need to be linked).
 ---
 
-### Available Information
+### Available Information(values are in RMB million)
 {session_context}
 
 ### Rules

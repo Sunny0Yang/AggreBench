@@ -192,7 +192,9 @@ class QACacheManager(BaseCacheManager):
         获取所有应导出到最终数据集的QA列表 (status为'liked'或'generated')。
         """
         exportable_qas = [qa for qa in self.cache_data.get("questions", []) if qa.get("status") in ["liked", "generated"]]
-        return sorted(exportable_qas, key=lambda x: x.get("difficulty", "easy"))
+        difficulty_rank = {"hard": 2, "medium": 1, "easy": 0}
+
+        return sorted(exportable_qas, key=lambda x: difficulty_rank.get(x.get("difficulty"), 3))
 
     def get_qa_by_id(self, qa_id: str) -> Dict | None:
         """根据QA ID获取特定的QA对"""
