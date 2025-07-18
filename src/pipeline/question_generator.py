@@ -454,9 +454,9 @@ class BatchValidator:
             evidence_results = self.sql_engine.execute_query(evidence_query)
             self.logger.debug(f"Evidence Raw SQL Result: {evidence_results}")
             evidence_sql_rows: List[Evidence] = [
-                    (str(r["code"]), str(r["sname"]), str(r["tdate"]),
-                    float(r["value"]),
-                    str(r["suffix"]))
+                    (str(r.get("code","")), str(r.get("sname","")), str(r.get("tdate","")),
+                    float(r.get("value",0)),
+                    str(r.get("suffix","")))
                     for r in evidence_results
                 ]
             self.logger.debug(f"Evidence SQL Rows: {evidence_sql_rows}")
