@@ -49,8 +49,8 @@ This question should involve either:
 {session_context}
 
 ### Rules
-1. Operation: exactly one aggregate function.  
-2. Scope: single column + explicit date range (e.g. “Dec 1-7 2023”).  
+1. Operation: MUST use a two-step aggregation (e.g., AVG implies SUM and COUNT) OR a single aggregation with simple filtering (e.g., COUNT WHERE X > Y)
+2. Scope: Involve one column with 1-2 simple filtering conditions, or direct comparison of two aggregated results from the same table. MUST include explicit date range (e.g. “Dec 1-7 2023”) No complex joins across multiple implicit "tables".  
 3. Output JSON only:
 {{
   "question": "...?",

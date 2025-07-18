@@ -345,8 +345,8 @@ class BatchValidator:
         
         # Get all generated/liked QAs that haven't been successfully SQL verified
         qas_to_validate = [
-            qa for qa in cache_manager.get_exportable_qas() 
-            if qa.get("sql_status") not in ["match", "skipped"]
+            qa for qa in cache_manager.get_exportable_qas()
+            if qa.get("sql_info", {}).get("sql_status") not in {"match", "skipped"}
         ]
         self.logger.info(f"Found {len(qas_to_validate)} QAs to validate.")
 
@@ -404,7 +404,6 @@ class BatchValidator:
             cache_manager.add_qa(qa_item, status=qa_item.get("status"), sql_info = sql_info)
             cache_manager.save_cache()
             self.logger.info(f"QA {qa_item.get('qa_id')} validation complete. Status: {sql_info.get('sql_status')}")
-
 
     def validate_and_correct(self, question: str, answer_llm: Any, 
                              evidence_llm: List[Evidence], sessions: List[Session]) -> Dict:
