@@ -2,7 +2,7 @@ import sqlite3
 from typing import List, Dict, Tuple, Any
 import logging
 import re
-from .struct import Table, Evidence
+from .data_struct import Table, Evidence
 
 
 class SqlEngine:

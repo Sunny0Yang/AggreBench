@@ -5,7 +5,7 @@ import os
 import re
 import logging
 from typing import List, Dict, Tuple, Any
-from utils.struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset, Evidence
+from utils.data_struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset, Evidence
 from utils.session_simulator import SessionSimulator
 from utils.prompt_templates import PERSONA
 
@@ -96,7 +96,7 @@ class BizFinLoader:
                     turn_id=f"{session_id}_turn_{turn_idx+1}",
                     speaker=turn["speaker"],
                     content=turn["content"],
-                    evidence=turn["mentioned_evidence"]
+                    evidence=turn.get("mentioned_evidence","")
                 ))
         else:
             # 如果不需要伪对话，添加简单的表头信息（基于规范化后的表格）

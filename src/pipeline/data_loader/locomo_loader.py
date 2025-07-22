@@ -5,7 +5,7 @@ import os
 import re
 import logging
 from typing import List, Dict
-from utils.struct import MultiModalTurn, Session, Conversation, ConversationDataset
+from utils.data_struct import MultiModalTurn, Session, Conversation, ConversationDataset
 
 logger = logging.getLogger(__name__)
 

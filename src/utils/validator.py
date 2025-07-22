@@ -2,7 +2,7 @@ from typing import Any, List, Dict, Tuple
 import logging
 import re
 import math # Import math for isclose
-from utils.struct import Evidence
+from utils.data_struct import Evidence
 
 logger = logging.getLogger(__name__)
 

@@ -11,7 +11,7 @@ from utils.params import get_base_parser, qa_generation_args
 from utils.logger import setup_logging
 from utils.prompt_templates import QA_GENERATION_PROMPTS
 from client.llm_client import client
-from utils.struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset, Evidence, load_data, save_results
+from utils.data_struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset, Evidence, load_data, save_results
 from utils.cache_manager import QACacheManager, DifficultyLevel
 from utils.sql_engine import SqlEngine
 from utils.validator import Validator

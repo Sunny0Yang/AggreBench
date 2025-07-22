@@ -1,4 +1,4 @@
-# src/utils/struct.py
+# src/utils/data_struct.py
 
 from typing import List, Dict, Tuple
 # 单个对话回合表示

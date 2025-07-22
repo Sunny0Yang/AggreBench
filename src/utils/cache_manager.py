@@ -6,7 +6,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Literal, Tuple
 from pathlib import Path
-from utils.struct import Evidence
+from utils.data_struct import Evidence
 # Common Difficulty Level type
 DifficultyLevel = Literal["easy", "medium", "hard"]
 

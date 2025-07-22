@@ -10,7 +10,7 @@ from pathlib import Path
 from utils.prompt_templates import SESSION_SIMULATOR_PROMPT
 from client.llm_client import client
 from utils.cache_manager import DialogCacheManager
-from utils.struct import Evidence
+from utils.data_struct import Evidence
 
 logger = logging.getLogger(__name__)
 
