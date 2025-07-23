@@ -65,7 +65,7 @@ def main():
 
     try:
         with open(args.input_filepath, 'w', encoding='utf-8') as f:
-            json.dump(updated_data, f, ensure_ascii=False, indent=4)
+            json.dump(updated_data, f, ensure_ascii=False, indent=2)
         print(f"结果已成功写入到 '{args.input_filepath}'。")
     except Exception as e:
         print(f"写入文件时发生错误: {e}")
