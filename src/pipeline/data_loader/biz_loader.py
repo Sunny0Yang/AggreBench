@@ -271,22 +271,34 @@ class BizFinLoader:
             return original_value_str
 
     def _table_to_evidences(self, table_objects: List[Table]) -> List[Evidence]:
-        """规范化表格 → 固定元组列表 (code, sname, date, value, flow_type)"""
+        """
+        把任意规范化后的 Table → List[Evidence]
+        Evidence = Tuple[code, sname, date, value, metric]
+        """
         evidences: List[Evidence] = []
 
         for tbl in table_objects:
+            required = {"code", "sname", "tdate"}
+            headers_set = set(tbl.headers)
+            # 过滤掉缺关键列的表
+            if not required.issubset(headers_set):
+                self.logger.warning(f"跳过缺少关键列的表: {tbl.headers}")
+                continue
+
+            # 剩下的列就是真正的指标列（可能不止一个）
+            metric_cols = [h for h in tbl.headers if h not in required]
+
             for row in tbl.rows:
-                code  = row.get("code",  "unknown")
-                sname = row.get("sname", "unknown")
-                date  = row.get("tdate", "unknown")
+                code  = str(row.get("code",  "unknown"))
+                sname = str(row.get("sname", "unknown"))
+                date  = str(row.get("tdate", "None"))
 
-                if "net_flow" in tbl.headers:
-                    val = float(row.get("net_flow", 0.0))
-                    evidences.append((code, sname, date, val, "net_flow"))
-
-                if "outflow" in tbl.headers:
-                    val = float(row.get("outflow", 0.0))
-                    evidences.append((code, sname, date, val, "outflow"))
+                for metric in metric_cols:
+                    try:
+                        val = float(row.get(metric, 0.0))
+                    except (TypeError, ValueError):
+                        continue
+                    evidences.append((code, sname, date, val, metric))
 
         return list(set(evidences))
 

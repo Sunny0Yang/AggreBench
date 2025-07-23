@@ -122,16 +122,12 @@ class SessionSimulator:
                 break
             
             # --- Prepare context for User LLM ---
-            # Summarize history up to the last assistant turn (inclusive of initial greeting)
-            summary_for_user_prompt = self._summarize_chat_history(self.current_dialog) 
             last_turn_for_user_prompt = ""
             if self.current_dialog:
                 last_turn_for_user_prompt = f"{self.current_dialog[-1]['speaker']}: {self.current_dialog[-1]['content']}"
 
             user_prompt = SESSION_SIMULATOR_PROMPT["user"].format(
-                evidences="\n".join(f"- {e}" for e in self.current_state["remaining_evidences"]), # `e` is already a tuple representation as a string
-                persona=self.current_state["persona"],
-                summary_of_past_conversation=summary_for_user_prompt,
+                evidences="\n".join(f"- {e}" for e in self.current_state["remaining_evidences"]),
                 last_turn_content=last_turn_for_user_prompt
             )
             if current_turn == self.max_turns - 1 and self.current_state["remaining_evidences"]:
@@ -153,16 +149,9 @@ class SessionSimulator:
             self.update_remaining_evidences(mentioned_by_user, 'user')
 
             # --- Prepare context for Assistant LLM ---
-            # Summarize history up to (but not including) the latest user turn
-            summary_for_assistant_prompt = self._summarize_chat_history(self.current_dialog[:-1])
-            # The last turn for the assistant is the user's just generated response
-            last_turn_for_assistant_prompt = f"User: {user_response_content}"
-
             assistant_prompt = SESSION_SIMULATOR_PROMPT["assistant"].format(
                 evidences="\n".join(f"- {e}" for e in self.current_state["remaining_evidences"]),
-                user_input=user_response_content, # Still useful as direct input
-                summary_of_past_conversation=summary_for_assistant_prompt,
-                last_turn_content=last_turn_for_assistant_prompt
+                last_turn_content=user_response_content,
             )
             logger.debug(f"assistant_prompt: {assistant_prompt}")
             logger.info(f"\n--- Assistant LLM (Turn {current_turn + 1}) ---")
@@ -242,42 +231,6 @@ class SessionSimulator:
         for entry in chat_history:
             formatted_history.append(f"{entry['speaker']}: {entry['content']}")
         return "\n".join(formatted_history)
-
-    def _summarize_chat_history(self, history_to_summarize: List[Dict]) -> str:
-        """
-        使用 LLM 总结对话历史。
-        """
-        if not history_to_summarize:
-            return "No prior conversation."
-        
-        # If only the initial assistant greeting, no meaningful conversation to summarize yet
-        if len(history_to_summarize) == 1 and history_to_summarize[0].get("speaker") == "Assistant" and history_to_summarize[0].get("content") == "Hi! How can I assist you today?":
-            return "Initial greeting."
-
-        # Create a formatted history string for summarization
-        formatted_history = self._format_chat_history(history_to_summarize)
-
-        # Define a prompt for summarization
-        summarization_prompt = f"""
-Please concisely summarize the following conversation history. Focus on key topics discussed, questions asked by the user, and answers provided by the assistant.
-The summary should be brief and capture the essence of the exchange.
-
-Conversation History:
-{formatted_history}
-
-Summary:
-"""
-        logger.debug(f"Summarization prompt: {summarization_prompt}")
-        try:
-            summary_response = self._llm_generate([{"role": "user", "content": summarization_prompt}])
-            cleaned_summary = summary_response.strip()
-            # If the summary is too short or generic, provide a default to avoid unnecessary tokens
-            if len(cleaned_summary) < 10 and not cleaned_summary.lower().startswith("no"):
-                return "Past conversation details."
-            return cleaned_summary
-        except Exception as e:
-            logger.error(f"Error summarizing chat history: {e}")
-            return "Failed to summarize past conversation."
 
     def _filter_remaining_evidences(self, remaining_evidences: List[Evidence], mentioned_evidences: List[Evidence], role: str) -> List[Evidence]:
         mentioned_set = set(mentioned_evidences)

@@ -158,19 +158,18 @@ class QuestionGenerator:
                 for idx, table in enumerate(session.tables):
                     context += f"Table {idx} (Headers: {', '.join(table.headers)}):\n"
                     for row_idx, row in enumerate(table.rows):
-                        row_values = []
-                        for header in table.headers:
-                            value = row.get(header, "")
-                            if header == "net_flow":
-                                row_values.append(str(float(value)))
-                                row_values.append("net_flow")
-                            elif header == "outflow":
-                                row_values.append(str(float(value)))
-                                row_values.append("outflow")
-                            else:
-                                row_values.append(str(value))
-                        row_tuple_str = "(" + ", ".join(repr(val) for val in row_values) + ")"
-                        context += f"  Row {row_idx}: {row_tuple_str}\n"
+                        code  = str(row.get("code",  ""))
+                        sname = str(row.get("sname", ""))
+                        tdate = str(row.get("tdate", ""))
+                        reserved = {"code", "sname", "tdate"}
+                        metric_cols = [h for h in table.headers if h not in reserved]
+                        for metric in metric_cols:
+                            try:
+                                val = float(row.get(metric, 0.0))
+                            except (TypeError, ValueError):
+                                val = "NaN"
+                            tup = (code, sname, tdate, val, metric)
+                            context += f"  Row {row_idx}: {tup}\n"
             else:
                 self.logger.debug(f"会话 {session.id} 构建对话上下文")
                 context += f"Time: {session.time}\n"
@@ -488,26 +487,40 @@ class BatchValidator:
 
     def _generate_sql_prompt(self, question: str, tables: List[Table]) -> str:
         from collections import defaultdict
-        suffix_to_rows: Dict[str, List[Dict]] = defaultdict(list)
+        metric_to_rows: Dict[str, List[Dict]] = defaultdict(list)
         for tbl in tables:
-            for row in tbl.rows:
-                suffix = "net_flow" if "net_flow" in row else "outflow"
-                suffix_to_rows[suffix].append(row)
+            reserved = {"code", "sname", "tdate"}
+            metric_cols = [h for h in tbl.headers if h not in reserved]
 
+            for row in tbl.rows:
+                for metric in metric_cols:
+                    val = row.get(metric)
+                    try:
+                        float(val)
+                    except (TypeError, ValueError):
+                        continue
+                    # 深拷贝避免污染原数据
+                    new_row = {
+                        "code":  str(row.get("code",  "")),
+                        "sname": str(row.get("sname", "")),
+                        "tdate": str(row.get("tdate", "")),
+                        "value": float(val),
+                    }
+                    metric_to_rows[metric].append(new_row)
+
+        # 2) 生成描述文本
         context_lines = []
-        for suffix, rows in suffix_to_rows.items():
-            table_name = f"Table_{suffix}"
+        for metric, rows in metric_to_rows.items():
+            table_name = f"Table_{metric}"
             context_lines.append(
                 f'{table_name} (Columns: "code" TEXT, "sname" TEXT, "tdate" TEXT, "value" REAL):\n'
             )
             if rows:
-                # 只展示一行样本
                 sample = rows[0]
                 sample_str = ", ".join(f'{k}: {v}' for k, v in sample.items())
                 context_lines.append(f"Sample Row: {sample_str}\n")
 
         context = "".join(context_lines)
-
         return QA_GENERATION_PROMPTS["sql_prompt_template"].format(
             question=question,
             tables=context

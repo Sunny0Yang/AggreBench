@@ -16,7 +16,7 @@ This question should require a single, straightforward aggregation (e.g., COUNT,
   "question": "...?",
   "answer": <float | int>,
   "evidence": [
-    ["code", "sname", "YYYY-MM-DD", <value>, "net_flow|outflow"],
+    ["code", "sname", "YYYY-MM-DD", <value>, <metric>],
     ...
   ]
 }}
@@ -56,7 +56,7 @@ This question should involve either:
   "question": "...?",
   "answer": <float | int>,
   "evidence": [
-    ["code", "sname", "YYYY-MM-DD", <value>, "net_flow|outflow"],
+    ["code", "sname", "YYYY-MM-DD", <value>, <metric>],
     ...
   ]
 }}
@@ -99,7 +99,7 @@ This question should require:
   "question": "...?",
   "answer": <float | int>,
   "evidence": [
-    ["code", "sname", "YYYY-MM-DD", <value>, "net_flow|outflow"],
+    ["code", "sname", "YYYY-MM-DD", <value>, <metric>],
     ...
   ]
 }}
@@ -184,39 +184,48 @@ The communication style tends to be **pragmatic and inquisitive**, frequently in
 
 SESSION_SIMULATOR_PROMPT: Dict[str, str] = ({
     "user": """
-You are acting as a normal user chatting with a professional AI assistant about financial data. 
+You are acting as a normal user chatting with a professional AI assistant about financial data.
+
+Your persona is:
+{persona}
+
 Your overarching goal is to ensure a **complete and thorough discussion** of **ALL** the financial data that still needs to be covered.
 
-Remaining **Un-discussed Financial Data** for this session (values are in RMB million): 
+Remaining **Un-discussed Financial Data** for this session (values are in RMB million):
 {evidences}
 
 ---
 
-Decision-making process 
-1. Review the list above and pick **one coherent group** (≈8 points) **or** a specific query. 
-2. Formulate a **concise** follow-up (1–2 sentences). 
-3. Tone: neutral, casual, not overly polite. 
-4. **After your message**, list every **exact original tuple evidence** you just referenced. Each evidence MUST be on a new line, starting with '- ', and contain ONLY ONE complete tuple. This `EVIDENCES_USED_IN_THIS_TURN:` block is NOT part of chat history.
+Decision-making process
+1. Examine the `Remaining Un-discussed Financial Data` list provided.
+2. **Choose a Strategy:**
+  * **Option 1 (Present Data + Ask for Analysis): From the list, choose around 8 semantically related data points, present them clearly and naturally, and then pose a real-world meaningful question for analysis.
+  * **Option 2 (Query for Specific Time Period):** Formulate a specific question asking for data within a defined date range (e.g., "December 1st to December 10th, 2023"). 
+3. Tone: neutral, casual, not overly polite.
+4. **After your message**, list every **exact original tuple evidence** you just explicitly implicated. Each evidence MUST be on a new line, starting with '- ', and contain ONLY ONE complete tuple. This `EVIDENCES_USED_IN_THIS_TURN:` block is NOT part of chat history.
 
-Past Conversation Summary: 
-{summary_of_past_conversation}
-
-Last Turn: 
+Last Assistant Response:
 {last_turn_content}
 
-Example for Option 1 (present data + ask): 
+### Example 
+Example for Option 1 (present data + ask for analysis):
 "I've been looking at 同花顺 (300033.SZ)'s capital flow data for December 2023. For example, on Dec 1st, there was an inflow of RMB 279 million, followed by RMB 570 million on Dec 4th, and RMB 456 million on Dec 8th. However, the trend shifted, with an outflow of RMB 148.58 million on Dec 13th, and RMB 212.77 million on Dec 14th. What's your analysis of these fluctuations and their potential impact?"
 
-Example of EVIDENCES_USED_IN_THIS_TURN:
+EVIDENCES_USED_IN_THIS_TURN:
 - ('300033.SZ', '同花顺', '2023-12-01', 279.0, 'net_flow')
 - ('300033.SZ', '同花顺', '2023-12-04', 570.0, 'net_flow')
+- ('300033.SZ', '同花顺', '2023-12-08', 456.0, 'net_flow')
+- ('300033.SZ', '同花顺', '2023-12-13', -148.58, 'net_flow')
+- ('300033.SZ', '同花顺', '2023-12-14', -212.77, 'net_flow')
 
-Persona: {persona} 
+Example for Option 2 (query for specific time period):
+"Can you give me the daily net inflow for 同花顺 (300033.SZ) during the first ten days of December 2023?"
 
 EVIDENCES_USED_IN_THIS_TURN:
-- (full_tuple_evidence_1)
-- (full_tuple_evidence_2)
+none
+for Option 2 (This section would be empty as the user is *requesting* new data, not referencing existing data from the list):
 """,
+
     "assistant": """
 You are a professional AI assistant specialized in finance. 
 Your goal is to answer concisely and **ensure every remaining data point is eventually discussed**.
@@ -232,17 +241,21 @@ Decision-making process
 3. **After answering**, proactively surface any **still-un-discussed tuple evidences** when natural. 
 4. Keep tone professional and succinct.
 
-Past Conversation Summary: 
-{summary_of_past_conversation}
-
 Last Turn: 
 {last_turn_content}
 
-User's Latest Input: {user_input}
+Example:
+When user ask: "Can you give me the daily net inflow for 同花顺 (300033.SZ) during the first ten days of December 2023?"
+
+You should response(remember that all the data are from the list "Remaining **Un-discussed Financial Data**", if there is no data in the list you needed, you should response "Sorry, I don't have the data for that time period."):
+Sure, here are the daily net inflow for 同花顺 (300033.SZ) during the first three days of December 2023:
+- Dec 1: RMB 279 million
+- Dec 2: RMB 570 million
+- Dec 3: RMB 456 million
 
 EVIDENCES_USED_IN_THIS_TURN:
-Each line below MUST contain exactly one full, valid tuple evidence.
-- (full_tuple_evidence_1)
-- (full_tuple_evidence_2)
+- ('300033.SZ', '同花顺', '2023-12-01', 279.0, 'net_flow')
+- ('300033.SZ', '同花顺', '2023-12-02', 570.0, 'net_flow')
+- ('300033.SZ', '同花顺', '2023-12-03', 456.0, 'net_flow')
 """
 })
