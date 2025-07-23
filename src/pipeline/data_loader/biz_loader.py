@@ -13,16 +13,40 @@ logger = logging.getLogger(__name__)
 
 class BizFinLoader:
     def __init__(self, model:str, max_turns:int, is_step:bool, cache_dir: str,
-                 combine_size = 10, generate_pseudo_dialogue=True
+                 combine_size = 10, generate_pseudo_dialogue=True,
+                 col_mapping: Dict[str, str] = None
                  ):
         self.logger = logger
         self.combine_size = combine_size
         self.session_simulator = SessionSimulator(model=model, max_turns=max_turns, is_step=is_step, cache_dir=cache_dir)
         self.generate_pseudo_dialogue = generate_pseudo_dialogue
         self.persona = PERSONA["financial"]
-        self.fund_flow_header_pattern = re.compile(r"(资金流向|资金流出)\[(\d{8})]")
-        self.currency_pattern = re.compile(r"^(-?\d+(\.\d+)?)\s*(元|万元|亿元)$")
-        self.percentage_pattern = re.compile(r"^(-?\d+(\.\d+)?)%$")
+        
+        self.error_set = []
+        self.col_mapping = col_mapping or {
+            "code": "股票代码",
+            "sname": "股票简称",
+            "tdate": "日期",
+            "net_flow": "资金流向",
+            "outflow": "资金流出",
+            "change_percent": "涨跌幅",
+            "low_af": "最低价_前复权",
+            "volume": "成交量",
+            "lowest": "最低价",
+            "inflow": "资金流入",
+            "dde_net_big_order": "dde大单净额",
+            "amount": "成交额",
+            "close_af": "收盘价_前复权",
+            "net_big_order_buy": "主动买入大单净额",
+            "open_af": "开盘价_前复权",
+            "highest": "最高价",
+            "turnover_rate": "换手率",
+            "close": "收盘价",
+            "amplitude": "振幅",
+            "high_af": "最高价_前复权",
+            "change_af": "涨跌_前复权",
+            "net_inflow": "资金净流入额"
+        }
 
     def _create_combined_conversation(self, samples: List[Dict], conversation_id: str) -> Conversation:
         """创建组合对话对象"""
@@ -36,7 +60,7 @@ class BizFinLoader:
             if sample_session:
                 sessions.append(sample_session)
                 session_counter += 1
-        
+        self.logger.debug(f"self.error_set: {set(self.error_set)}")
         return Conversation(
             conversation_id=conversation_id,
             speakers=["Assistant"],
@@ -142,67 +166,59 @@ class BizFinLoader:
                     "headers": headers,
                     "rows": rows
                 })
-        
         return tables
 
     def _normalize_tables(self, raw_table_objects: List[Table]) -> List[Table]:
         """
-        将原始的宽格式表格转换为规范化的资金流向表格（net_flow 和 outflow）。
+        将原始的宽格式表格转换为规范化的表格
         """
-        net_flow_rows = []
-        outflow_rows = []
-        # For this request, we only focus on `capital_net_flow` and `capital_outflow`.
-
+        from collections import defaultdict
+        metric_groups = defaultdict(list)
+        fund_flow_header_pattern = re.compile(r"(.*?)\[(\d{8})]")
         for raw_table in raw_table_objects:
             for row_dict in raw_table.rows:
-                stock_code = row_dict.get("股票代码")
-                stock_name = row_dict.get("股票简称")
+                stock_code = row_dict.get(self.col_mapping.get("code"))
+                stock_name = row_dict.get(self.col_mapping.get("sname"))
                 
                 if not stock_code or not stock_name:
                     self.logger.warning(f"跳过缺少 '股票代码' 或 '股票简称' 的行: {row_dict}")
                     continue
 
                 for header, value_str in row_dict.items():
-                    date_match = self.fund_flow_header_pattern.match(header)
+                    date_match = fund_flow_header_pattern.match(header)
                     if date_match:
-                        flow_type = date_match.group(1) # "资金流向" or "资金流出"
-                        date_str = date_match.group(2)  # YYYYMMDD
-                        # Convert to YYYY-MM-DD for consistency with DATE type
+                        chinese_metric = date_match.group(1)
+                        date_str = date_match.group(2) 
+
+                        metric_eng = self._reverse_map(chinese_metric)
                         formatted_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
                         
                         standardized_value = self._parse_and_standardize_value(value_str)
 
                         if isinstance(standardized_value, (int, float)):
-                            if flow_type == "资金流向":
-                                net_flow_rows.append({
-                                    "code": stock_code,
-                                    "sname": stock_name,
-                                    "tdate": formatted_date,
-                                    "net_flow": standardized_value
-                                })
-                            elif flow_type == "资金流出":
-                                outflow_rows.append({
-                                    "code": stock_code,
-                                    "sname": stock_name,
-                                    "tdate": formatted_date,
-                                    "outflow": abs(standardized_value)
-                                })
+                            metric_groups[metric_eng].append({
+                                "code": stock_code,
+                                "sname": stock_name,
+                                "tdate": formatted_date,
+                                metric_eng: standardized_value
+                            })
                         else:
-                            self.logger.warning(f"无法标准化资金流向/流出值 '{value_str}' for {stock_name} on {formatted_date}. 原始值: {value_str}")
-        
+                            self.logger.warning(f"无法标准化{metric_eng}值 '{value_str}' for {stock_name} on {formatted_date}. 原始值: {value_str}")
         normalized_tables = []
-        if net_flow_rows:
+        for metric_eng, rows in metric_groups.items():
             normalized_tables.append(Table(
-                headers=["code", "sname", "tdate", "net_flow"],
-                rows=net_flow_rows
+                headers=["code", "sname", "tdate", metric_eng],
+                rows=rows
             ))
-        if outflow_rows:
-            normalized_tables.append(Table(
-                headers=["code", "sname", "tdate", "outflow"],
-                rows=outflow_rows
-            ))
-        
         return normalized_tables
+
+    def _reverse_map(self, key: str) -> str:
+        for k, v in self.col_mapping.items():
+            if v == key:
+                return k
+        self.logger.warning(f"找不到映射关系: {key}")
+        self.error_set.append(key)
+        return key
 
     def _parse_and_standardize_value(self, value: Any) -> Any:
         """
@@ -213,9 +229,10 @@ class BizFinLoader:
             return value
 
         original_value_str = value.strip()
-
+        currency_pattern = re.compile(r'^(-?\d+(?:\.\d+)?)\s*(.*元)$')
+        percentage_pattern = re.compile(r"^(-?\d+(\.\d+)?)%$")
         # Handle percentage
-        percentage_match = self.percentage_pattern.match(original_value_str)
+        percentage_match = percentage_pattern.match(original_value_str)
         if percentage_match:
             try:
                 return float(percentage_match.group(1)) / 100.0
@@ -224,20 +241,29 @@ class BizFinLoader:
                 return original_value_str
 
         # Handle currency
-        currency_match = self.currency_pattern.match(original_value_str)
+        currency_match = currency_pattern.match(original_value_str)
         if currency_match:
             try:
                 num_part = float(currency_match.group(1))
-                unit = currency_match.group(3)
-                if unit == "万元":
-                    return num_part
-                elif unit == "亿元":
-                    return num_part * 100.0
-                else: # "元"
-                    return num_part / 1000000.0
-            except ValueError:
-                self.logger.warning(f"无法解析货币: {original_value_str}")
-                return original_value_str
+                unit = currency_match.group(2)
+                # 以“万元”为基准做转换
+                unit_to_wan = {
+                    "元": 1e-4,
+                    "港元": 1e-4,
+                    "美元": 8e-4,
+                    "万元": 1.0,
+                    "万港元": 1.0,
+                    "万美元": 8.0,
+                    "亿元": 1e4,
+                    "亿港元": 1e4,
+                    "亿美元": 8e4,
+                }
+                if unit in unit_to_wan:
+                    return num_part * unit_to_wan[unit]
+                else:
+                    raise ValueError(f"Unsupported currency unit: {unit}")
+            except ValueError as e:
+                raise ValueError(f"Invalid currency value: {original_value_str}") from e
 
         try:
             return round(float(original_value_str),2)
@@ -332,6 +358,7 @@ class BizFinLoader:
         
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(serialized, f, indent=2, ensure_ascii=False)
+        
 
 def main():
     import argparse
