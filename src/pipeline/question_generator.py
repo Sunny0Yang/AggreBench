@@ -376,16 +376,14 @@ class BatchValidator:
                 relevant_conversation = next((conv for conv in dataset.conversations if conv.id == conversation_id), None)
                 if not relevant_conversation:
                     self.logger.warning(f"Conversation {conversation_id} not found for QA {qa_item.get('qa_id')}. Skipping validation.")
-                    qa_item["sql_status"] = "sql_skipped_no_conversation"
-                    cache_manager.add_qa(qa_item, status=qa_item.get("status"), sql_status=qa_item.get("sql_status"))
+                    cache_manager.add_qa(qa_item, status=qa_item.get("status"), sql_info={"sql_status": "skipped", "sql_error": "no conversation"})
                     cache_manager.save_cache()
                     continue
 
                 selected_sessions = [s for s in relevant_conversation.sessions if s.id in session_ids]
                 if not selected_sessions:
                     self.logger.warning(f"Sessions {session_ids} not found for QA {qa_item.get('qa_id')}. Skipping validation.")
-                    qa_item["sql_status"] = "sql_skipped_no_sessions"
-                    cache_manager.add_qa(qa_item, status=qa_item.get("status"), sql_status=qa_item.get("sql_status"))
+                    cache_manager.add_qa(qa_item, status=qa_item.get("status"), sql_info={"sql_status": "skipped", "sql_error": "no sessions"})
                     cache_manager.save_cache()
                     continue
                 
@@ -422,10 +420,9 @@ class BatchValidator:
         for session in sessions:
             if session.tables:
                 tables.extend(session.tables)
-        
         if not tables:
             self.logger.warning(f"没有可用的表格数据，跳过SQL验证。")
-            result["sql_status"] = "sql_skipped"
+            result["sql_status"] = "skipped"
             return result
         
         try:

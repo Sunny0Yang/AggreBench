@@ -31,7 +31,7 @@ class BizFinLoader:
             "outflow": "资金流出",
             "change_percent": "涨跌幅",
             "low_af": "最低价_前复权",
-            "volume": "成交量",
+            # "volume": "成交量",（单位是万股，不支持）
             "lowest": "最低价",
             "inflow": "资金流入",
             "dde_net_big_order": "dde大单净额",
