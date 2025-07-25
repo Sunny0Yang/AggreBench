@@ -128,6 +128,7 @@ class SessionSimulator:
 
             user_prompt = SESSION_SIMULATOR_PROMPT["user"].format(
                 evidences="\n".join(f"- {e}" for e in self.current_state["remaining_evidences"]),
+                persona=self.current_state["persona"],
                 last_turn_content=last_turn_for_user_prompt
             )
             if current_turn == self.max_turns - 1 and self.current_state["remaining_evidences"]:

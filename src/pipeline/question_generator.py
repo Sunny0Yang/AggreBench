@@ -368,36 +368,36 @@ class BatchValidator:
             conversation_id = qa_item.get("conversation_id")
             session_ids = qa_item.get("session_ids")
 
-            if not question or not answer_llm or not evidence_llm or not conversation_id or not session_ids:
+            if not all([question, answer_llm, evidence_llm, conversation_id, session_ids]):
                 self.logger.warning(f"Skipping malformed QA item: {qa_item.get('qa_id')}")
-                continue
+                sql_info = {"sql_status": "skipped", "sql_error": "malformed_qa"}
+            else:
+                # Find the relevant sessions from the dataset
+                relevant_conversation = next((conv for conv in dataset.conversations if conv.id == conversation_id), None)
+                if not relevant_conversation:
+                    self.logger.warning(f"Conversation {conversation_id} not found for QA {qa_item.get('qa_id')}. Skipping validation.")
+                    qa_item["sql_status"] = "sql_skipped_no_conversation"
+                    cache_manager.add_qa(qa_item, status=qa_item.get("status"), sql_status=qa_item.get("sql_status"))
+                    cache_manager.save_cache()
+                    continue
 
-            # Find the relevant sessions from the dataset
-            relevant_conversation = next((conv for conv in dataset.conversations if conv.id == conversation_id), None)
-            if not relevant_conversation:
-                self.logger.warning(f"Conversation {conversation_id} not found for QA {qa_item.get('qa_id')}. Skipping validation.")
-                qa_item["sql_status"] = "sql_skipped_no_conversation"
-                cache_manager.add_qa(qa_item, status=qa_item.get("status"), sql_status=qa_item.get("sql_status"))
-                cache_manager.save_cache()
-                continue
+                selected_sessions = [s for s in relevant_conversation.sessions if s.id in session_ids]
+                if not selected_sessions:
+                    self.logger.warning(f"Sessions {session_ids} not found for QA {qa_item.get('qa_id')}. Skipping validation.")
+                    qa_item["sql_status"] = "sql_skipped_no_sessions"
+                    cache_manager.add_qa(qa_item, status=qa_item.get("status"), sql_status=qa_item.get("sql_status"))
+                    cache_manager.save_cache()
+                    continue
+                
+                self.logger.info(f"Validating QA: {qa_item.get('qa_id')}")
 
-            selected_sessions = [s for s in relevant_conversation.sessions if s.id in session_ids]
-            if not selected_sessions:
-                self.logger.warning(f"Sessions {session_ids} not found for QA {qa_item.get('qa_id')}. Skipping validation.")
-                qa_item["sql_status"] = "sql_skipped_no_sessions"
-                cache_manager.add_qa(qa_item, status=qa_item.get("status"), sql_status=qa_item.get("sql_status"))
-                cache_manager.save_cache()
-                continue
-            
-            self.logger.info(f"Validating QA: {qa_item.get('qa_id')}")
-
-            # Perform validation and correction
-            sql_info = self.validate_and_correct(
-                                    question=question,
-                                    answer_llm=answer_llm,
-                                    evidence_llm=evidence_llm,
-                                    sessions=selected_sessions
-                                )
+                # Perform validation and correction
+                sql_info = self.validate_and_correct(
+                                        question=question,
+                                        answer_llm=answer_llm,
+                                        evidence_llm=evidence_llm,
+                                        sessions=selected_sessions
+                                    )
             
             # Update cache with validation results
             cache_manager.add_qa(qa_item, status=qa_item.get("status"), sql_info = sql_info)

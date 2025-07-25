@@ -107,7 +107,7 @@ class QACacheManager(BaseCacheManager):
         如果QA对已存在（通过qa_id判断），则更新其信息（特别是status/sql_status）。
         否则，添加新的QA对。
         status: liked / disliked / generated
-        sql_status: match / skipped / *_not_match / not yet / failed
+            sql_status: match / skipped / *_not_match / not yet / failed
         优先保留 'liked' 或 'disliked' 状态，不被 'generated' 覆盖。
         """
         qa_id = qa_pair.get("qa_id")
@@ -267,6 +267,7 @@ class DialogCacheManager(BaseCacheManager):
 
     def update_cache_data(self, state: Dict, dialog: List[Dict]):
         """更新缓存中的会话状态和对话历史"""
+        state["evidences"] = sorted(state["evidences"])
         self.cache_data["state"] = state
         self.cache_data["dialog"] = dialog
         self.save_cache()
