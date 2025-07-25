@@ -18,16 +18,16 @@ class SqlEngine:
         reserved = {"code", "sname", "tdate"}
         for tbl in tables:
             metric_cols = [h for h in tbl.headers if h not in reserved]
-        for row in tbl.rows:
-            code  = str(row.get("code", ""))
-            sname = str(row.get("sname", ""))
-            tdate = str(row.get("tdate", ""))
-            for metric in metric_cols:
-                try:
-                    val = float(row[metric])
-                except (TypeError, ValueError, KeyError):
-                    continue
-                evidence.append((code, sname, tdate, val, metric))
+            for row in tbl.rows:
+                code  = str(row.get("code", ""))
+                sname = str(row.get("sname", ""))
+                tdate = str(row.get("tdate", ""))
+                for metric in metric_cols:
+                    try:
+                        val = float(row[metric])
+                    except (TypeError, ValueError, KeyError):
+                        continue
+                    evidence.append((code, sname, tdate, val, metric))
         # 2) 按 metric 建表 & 插入        
         grouped: dict[str, List[Evidence]] = {}
         for row in evidence:
@@ -36,6 +36,7 @@ class SqlEngine:
         for metric, rows in grouped.items():
             tbl_name = f"Table_{metric}"
             cur.execute(f"DROP TABLE IF EXISTS {tbl_name}")
+            self.logger.debug(f"Dropped table {tbl_name}")
             cur.execute(
                 f"""CREATE TABLE {tbl_name} (
                     code  TEXT,
