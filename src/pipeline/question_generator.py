@@ -282,7 +282,14 @@ class QuestionGenerator:
         }
         """
         try:
-            data = json.loads(response.strip())
+            cleaned_response = response.strip()
+            if cleaned_response.startswith('```json'):
+                cleaned_response = cleaned_response[7:]  # 移除开头的```json
+            if cleaned_response.endswith('```'):
+                cleaned_response = cleaned_response[:-3]  # 移除结尾的```
+            cleaned_response = cleaned_response.strip()
+
+            data = json.loads(cleaned_response)
 
             question_text = data.pop("question", None)
             answer_text   = data.pop("answer", None)
@@ -350,7 +357,7 @@ class BatchValidator:
         # Get all generated/liked QAs that haven't been successfully SQL verified
         qas_to_validate = [
             qa for qa in cache_manager.get_exportable_qas()
-            if qa.get("sql_info", {}).get("sql_status") not in {"match", "skipped"}
+            if qa.get("sql_info", {}).get("sql_status") not in {"match","evidence_not_match","answer_not_match; evidence_not_match"}
         ]
         self.logger.info(f"Found {len(qas_to_validate)} QAs to validate.")
 
@@ -359,11 +366,12 @@ class BatchValidator:
             answer_llm = qa_item.get("answer_text")
             # 列表转元组
             raw_evi = qa_item.get("evidence")
-            if isinstance(raw_evi, list) and raw_evi and isinstance(raw_evi[0], list):
-                evidence_llm = [tuple(r) for r in raw_evi] 
-            else:
-                evidence_llm = []
-                self.logger.warning(f"Evidence for QA {qa_item.get('qa_id')} is not in the expected format.")
+            # if isinstance(raw_evi, list) and raw_evi and isinstance(raw_evi[0], list):
+            #     evidence_llm = [tuple(r) for r in raw_evi] 
+            # else:
+            #     evidence_llm = []
+            #     self.logger.warning(f"Evidence for QA {qa_item.get('qa_id')} is not in the expected format.")
+            evidence_llm = [tuple(r) for r in raw_evi]
 
             conversation_id = qa_item.get("conversation_id")
             session_ids = qa_item.get("session_ids")
@@ -440,6 +448,20 @@ class BatchValidator:
             result["sql_evidence_query"] = evidence_query
             self.logger.debug(f"Answer SQL: {answer_query}")
             self.logger.debug(f"Evidence SQL: {evidence_query}")
+            print("\n【请检查以下查询】")
+            print("Answer Query:")
+            print(answer_query)
+            print("\nEvidence Query:")
+            print(evidence_query)
+            confirm = input("\n是否满意？(回车=满意 / 其他=不满意并手动输入查询) ").strip()
+
+            if confirm:          # 用户输入了内容 -> 不满意
+                print("请输入新的 Answer Query：")
+                answer_query = input("> ").strip()
+                print("请输入新的 Evidence Query：")
+                evidence_query = input("> ").strip()
+                result["sql_answer_query"] = answer_query
+                result["sql_evidence_query"] = evidence_query
 
             # Execute answer query
             answer_results = self.sql_engine.execute_query(answer_query)
@@ -530,17 +552,17 @@ class BatchValidator:
             {"role": "user", "content": prompt}
         ]
         try:
+            # 设置max_tokens为1024，避免生成中断
+            self.logger.debug(f"LLM Prompt: {prompt}")
             completion = client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                stream=True,
+                stream=False,
                 extra_body={"enable_thinking": False}
             )
-            response_content = ""
-            for chunk in completion:
-                if chunk.choices[0].delta.content:
-                    response_content += chunk.choices[0].delta.content
-            self.logger.debug(f"API response: {response_content}")
+            response_content = completion.choices[0].message.content
+
+            self.logger.debug(f"Full API response: {response_content}")
             return response_content
         except Exception as e:
             self.logger.error(f"SQL生成失败: {e}")
@@ -569,7 +591,7 @@ class BatchValidator:
             evidence_sql = self._clean_sql(evidence_match.group(1))
 
         if not answer_sql or not evidence_sql:
-            self.logger.error(f"未能解析LLM的SQL响应，格式不正确或缺少SQL。原始文本:\n{sql_text}")
+            self.logger.error(f"未能解析LLM的SQL响应，格式不正确或缺少SQL。原始文本:\n{full_sql}")
             raise ValueError("未能解析LLM的SQL响应，格式不正确或缺少SQL。")
         return answer_sql, evidence_sql
 
