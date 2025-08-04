@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 class BizFinLoader:
     def __init__(self, model:str, max_turns:int, is_step:bool, cache_dir: str,
                  combine_size = 10, generate_pseudo_dialogue=True,
-                 col_mapping: Dict[str, str] = None
+                 col_mapping: Dict[str, str] = None,
+                 sname_mapping: Dict[str, str] = None
                  ):
         self.logger = logger
         self.combine_size = combine_size
@@ -47,6 +48,41 @@ class BizFinLoader:
             "change_af": "涨跌_前复权",
             "net_inflow": "资金净流入额"
         }
+        
+        # 股票简称的中英文映射
+        # 在__init__方法中添加或修改sname_mapping初始化
+        self.sname_mapping = sname_mapping or {
+        # 中国股票
+        "万科A": "Vanke_A",
+        "中信证券": "Citic_Securities",
+        "中国中免": "China_Duty_Free",
+        "中国平安": "Ping_An",
+        "五粮液": "Wuliangye",
+        "京东": "JD",
+        "伊利股份": "Yili",
+        "同花顺": "Tonghuashun",
+        "宁德时代": "CATL",
+        "小米集团-W": "Xiaomi",
+        "恒瑞医药": "Hengrui_Medicine",
+        "招商银行": "CMB",
+        "格力电器": "Gree",
+        "海康威视": "Hikvision",
+        "理想汽车": "Li_Auto",
+        "百度": "Baidu",
+        "药明康德": "WuXi_AppTec",
+        "蔚来": "NIO",
+        "贵州茅台": "Kweichow_Moutai",
+        "快手-W": "Kuaishou",
+        "Pinterest": "Pinterest",
+        "亚马逊": "Amazon",
+        "哔哩哔哩": "Bilibili",
+        "奈飞": "Netflix",
+        "微软": "Microsoft",
+        "特斯拉": "Tesla",
+        "苹果": "Apple",
+        "谷歌C": "Google_C"
+        }
+        self.collected_snames = set()  # 用于收集所有出现的股票简称
 
     def _create_combined_conversation(self, samples: List[Dict], conversation_id: str) -> Conversation:
         """创建组合对话对象"""
@@ -183,6 +219,12 @@ class BizFinLoader:
                 if not stock_code or not stock_name:
                     self.logger.warning(f"跳过缺少 '股票代码' 或 '股票简称' 的行: {row_dict}")
                     continue
+                
+                # 收集所有出现的股票简称
+                self.collected_snames.add(stock_name)
+                
+                # 使用_reverse_map_sname转换股票简称为英文
+                stock_name_eng = self._reverse_map_sname(stock_name)
 
                 for header, value_str in row_dict.items():
                     date_match = fund_flow_header_pattern.match(header)
@@ -198,7 +240,7 @@ class BizFinLoader:
                         if isinstance(standardized_value, (int, float)):
                             metric_groups[metric_eng].append({
                                 "code": stock_code,
-                                "sname": stock_name,
+                                "sname": stock_name_eng,  # 使用转换后的英文名称
                                 "tdate": formatted_date,
                                 metric_eng: standardized_value
                             })
@@ -217,6 +259,17 @@ class BizFinLoader:
             if v == key:
                 return k
         self.logger.warning(f"找不到映射关系: {key}")
+        self.error_set.append(key)
+        return key
+
+    def _reverse_map_sname(self, key: str) -> str:
+        """
+        将中文股票简称转换为英文
+        复用_reverse_map的逻辑，但使用sname_mapping
+        """
+        if key in self.sname_mapping:
+            return self.sname_mapping[key]
+        self.logger.warning(f"找不到股票简称映射关系: {key}")
         self.error_set.append(key)
         return key
 
@@ -327,6 +380,11 @@ class BizFinLoader:
                 conversation_id = f"conv_{group_idx//self.combine_size+1}"
                 conversation = self._create_combined_conversation(group_samples, conversation_id)
                 conversations.append(conversation)
+            
+            # 输出收集到的所有股票简称，以便后续创建完整的映射
+            if self.collected_snames:
+                logger.info(f"收集到的股票简称: {sorted(list(self.collected_snames))}")
+                logger.info(f"未映射的股票简称: {sorted(list(set(self.error_set)))}")
             
             # 创建数据集对象
             logger.info(f"成功加载 {len(conversations)} 个对话")
