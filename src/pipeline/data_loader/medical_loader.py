@@ -3,28 +3,57 @@ import json
 import logging
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import List, Dict
+from typing import List, Dict, Tuple, Any
 from utils.data_struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset
+from utils.session_simulator import SessionSimulator
+from utils.prompt_templates import PERSONA
 
 logger = logging.getLogger(__name__)
 
 class MedicalLoader:
     def __init__(self, input_dir: str, output_dir: str, 
-                 max_events_per_session: int = 8, 
-                 time_window_hours: int = 24):
+                 max_events_per_session: int, 
+                 time_window_hours: int,
+                 generate_pseudo_dialogue: bool,
+                 model: str,
+                 cache_dir: str,
+                 max_turns: int = 5,
+                 is_step: bool = True):
         """
         Medical Data Loader
         
         Parameters:
         input_dir: Path to raw data directory
         output_dir: Path to processed output directory
-        max_events_per_session: Maximum number of events per session
+        max_events_per_session: Maximum events per session
         time_window_hours: Time window size (hours)
+        generate_pseudo_dialogue: Whether to generate pseudo dialogues
+        model: Model to use for dialogue generation
+        cache_dir: Directory for caching generated dialogues
+        max_turns: Maximum number of dialogue turns (default: 5)
+        is_step: Whether to enable step-by-step generation with pauses (default: True)
         """
         self.input_dir = input_dir
         self.output_dir = output_dir
         self.max_events_per_session = max_events_per_session
         self.time_window_hours = time_window_hours
+        self.generate_pseudo_dialogue = generate_pseudo_dialogue
+        self.model = model
+        self.cache_dir = cache_dir
+        self.max_turns = max_turns
+        self.is_step = is_step
+        
+        # Initialize session simulator if needed
+        if self.generate_pseudo_dialogue:
+            self.session_simulator = SessionSimulator(
+                model=self.model, 
+                max_turns=self.max_turns,
+                is_step=self.is_step,
+                cache_dir=self.cache_dir,
+                domain="medical"
+            )
+            self.persona = PERSONA["medical"]
+        
         self.table_files = {
             'ChemistryEvents': 'ChemistryEvents.csv',
             'ABGEvents': 'ABGEvents.csv',
@@ -34,6 +63,7 @@ class MedicalLoader:
         
         # Ensure output directory exists
         os.makedirs(self.output_dir, exist_ok=True)
+        os.makedirs(self.cache_dir, exist_ok=True)
         
     def load_and_process(self):
         """Load and process all table data"""
@@ -50,18 +80,23 @@ class MedicalLoader:
                     # Read CSV file, handle special values
                     df = pd.read_csv(file_path, low_memory=False)
                     
-                    # Additional error handling
-                    if 'time_event' not in df.columns:
-                        logger.warning(f"Table {table_name} missing 'time_event' column, skipping")
-                        continue
-                        
-                    # Rename columns for consistency
-                    if table_name == 'CultureEvents':
-                        df['value'] = df['result']
-                    elif table_name == 'ABGEvents':
+                    # 在加载时立即转换时间戳为字符串
+                    if 'time_event' in df.columns:
+                        df['time_event'] = pd.to_datetime(
+                            df['time_event'], 
+                            errors='coerce'
+                        )
+                        # 转换时间戳为字符串格式
+                        df['time_event'] = df['time_event'].apply(
+                            lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if not pd.isna(x) else ""
+                        )
+                    
+                    # 处理特定表格的列
+                    if table_name == 'ABGEvents':
                         df['variable_name'] = df['abg_ventilator_mode'] + '-' + df['abg_name']
                         df.drop(columns=['abg_ventilator_mode', 'abg_name'], inplace=True)
-                        df.rename(columns={'value': 'value'}, inplace=True)
+                    elif table_name == 'CultureEvents':
+                        df['value'] = df['result']
                     elif table_name == 'CBCEvents':
                         df.rename(columns={'cbc_name': 'variable_name'}, inplace=True)
                     elif table_name == 'ChemistryEvents':
@@ -75,32 +110,12 @@ class MedicalLoader:
             else:
                 logger.warning(f"File not found: {file_path}")
         
-        # If no data, return immediately
-        if not all_data:
-            logger.error("No valid data found")
-            return None
-        
         # 2. Merge all table data
         combined_df = pd.concat(all_data.values(), ignore_index=True)
         logger.info(f"Merged data count: {len(combined_df)}")
         
-        # 3. Parse time format and normalize
-        combined_df['time_event'] = pd.to_datetime(
-            combined_df['time_event'], 
-            errors='coerce'
-        )
-        num_valid = combined_df['time_event'].notna().sum()
-        num_invalid = combined_df['time_event'].isna().sum()
-        logger.info(f"Valid time records: {num_valid}")
-        logger.info(f"Invalid time records: {num_invalid}")
-
-        # Print some examples of invalid time records
-        if num_invalid > 0:
-            invalid_samples = combined_df[combined_df['time_event'].isna()]['time_event'].head(5).tolist()
-            logger.warning(f"Invalid time examples: {invalid_samples}")
-
-        # Delete invalid time records
-        combined_df = combined_df.dropna(subset=['time_event'])
+        # 3. Delete invalid time records
+        combined_df = combined_df[combined_df['time_event'] != ""]
         logger.info(f"Valid events count: {len(combined_df)}")
         
         # 4. Group by patient
@@ -111,7 +126,7 @@ class MedicalLoader:
         patient_index = {}
         
         for i, (patient_id, patient_data) in enumerate(grouped):
-            if i >= 5:  # Process only first 5 patients for testing
+            if i >= 1:  # Process only first 5 patients for testing
                 break
             logger.info(f"Processing patient: {patient_id}, events: {len(patient_data)}")
             
@@ -129,31 +144,22 @@ class MedicalLoader:
                 table_objects = self._create_table_objects(session_data)
                 
                 # Create Session object
-                session_id = f"{patient_id}_session_{session_idx+1}"
+                session_id = f"patient_{patient_id}_session_{session_idx+1}"
                 
                 # Safely calculate time range
                 try:
-                    min_time = session_data['time_event'].min()
-                    max_time = session_data['time_event'].max()
-                    
-                    # Ensure time is valid
-                    if pd.isna(min_time) or pd.isna(max_time):
-                        time_range_str = "Invalid time range"
-                    else:
-                        time_range_str = f"{min_time.strftime('%Y-%m-%d %H:%M')} to {max_time.strftime('%Y-%m-%d %H:%M')}"
+                    # 由于时间戳已经是字符串，我们可以直接使用字符串操作
+                    min_time = min(session_data['time_event'])
+                    max_time = max(session_data['time_event'])
+                    time_range_str = f"{min_time} to {max_time}"
                 except Exception as e:
                     logger.error(f"Error calculating time range: {str(e)}")
                     time_range_str = "Unknown time range"
                 
-                # Create dialogue turns
-                turns = [
-                    MultiModalTurn(
-                        turn_id=f"{session_id}_intro",
-                        speaker="System",
-                        content=f"Session contains {len(session_data)} medical events"
-                    )
-                ]
-                
+                # Generate pseudo dialogue or simple intro
+                turns = self._generate_turns_for_session(
+                    session_id, table_objects
+                )
                 session_objects.append(Session(
                     session_id=session_id,
                     time=time_range_str,
@@ -187,17 +193,96 @@ class MedicalLoader:
         logger.info(f"Data processing complete, generated: {len(all_conversations)} conversations")
         return dataset
     
+    def _generate_turns_for_session(self, session_id: str, tables: List[Dict]) -> List[MultiModalTurn]:
+        """
+        为会话生成对话回合
+        """
+        turns = []
+        
+        if self.generate_pseudo_dialogue:
+            # 将表格转换为证据
+            evidences = self._tables_to_evidences(tables)
+            
+            if not evidences:
+                logger.warning(f"No valid evidences generated for session {session_id}")
+                return [MultiModalTurn(
+                    turn_id=f"{session_id}_intro",
+                    speaker="System",
+                    content=f"No valid evidences could be generated"
+                )]
+            
+            # Generate dialogue
+            logger.info(f"为会话 {session_id} 生成伪对话，共有 {len(evidences)} 条证据")
+            
+            # 设置医疗领域的persona
+            persona = PERSONA["medical"]
+
+            # 生成对话
+            dialog = self.session_simulator.generate_dialog(
+                evidences=evidences,
+                persona=persona
+            )
+            
+            # 转换为回合格式
+            for i, turn in enumerate(dialog):
+                # 确保返回MultiModalTurn对象
+                turns.append(MultiModalTurn(
+                    turn_id=turn["id"],
+                    speaker=turn["speaker"],
+                    content=turn["content"],
+                    evidence=turn.get("mentioned_evidence", [])
+                ))
+        else:
+            # 确保返回MultiModalTurn对象
+            turns.append(MultiModalTurn(
+                turn_id=f"{session_id}_intro",
+                speaker="System",
+                content=f"Session contains medical events",
+                evidence=[]
+            ))
+
+        return turns
+    
+    def _tables_to_evidences(self, tables: List[Table]) -> List[Tuple]:
+        """
+        将表格转换为证据元组列表
+        Evidence = Tuple[patient_id, timestamp, table_type, ...其他值]
+        """
+        evidences = []
+        for table in tables:
+            table_type = getattr(table, "table_type", "Unknown")
+            for row in table.rows:
+                try:
+                    if isinstance(row, dict):
+                        row_values = tuple(row.values())
+                    else:
+                        row_values = tuple(row)
+                    
+                    evidence = (row_values[:2] + (str(table_type),) + row_values[2:])
+                    
+                    evidences.append(evidence)
+                    logger.debug(f"evidence:{evidence}")    
+                except Exception as e:
+                    logger.warning(f"Error creating evidence: {str(e)}")
+                    logger.debug(f"Problematic row: {row}")
+        return evidences
+
     def _create_sessions_for_patient(self, patient_id: str, patient_data: pd.DataFrame) -> List[pd.DataFrame]:
         """Create time-clustered sessions for a single patient"""
+        # 由于时间戳已经是字符串，我们需要转换为datetime进行时间计算
+        patient_data = patient_data.copy()
+        patient_data['time_event_dt'] = pd.to_datetime(patient_data['time_event'], errors='coerce')
+        patient_data = patient_data.dropna(subset=['time_event_dt'])
+        
         # Sort events by time
-        sorted_events = patient_data.sort_values('time_event').reset_index(drop=True)
+        sorted_events = patient_data.sort_values('time_event_dt').reset_index(drop=True)
         
         sessions = []
         current_session = []
         current_window_end = None
         
         for idx, event in sorted_events.iterrows():
-            event_time = event['time_event']
+            event_time = event['time_event_dt']
             
             # If first event
             if not current_session:
@@ -211,13 +296,16 @@ class MedicalLoader:
             else:
                 # Save current session and start new one
                 if current_session:  # Ensure session is not empty
-                    sessions.append(pd.DataFrame(current_session))
+                    # 删除临时datetime列
+                    session_df = pd.DataFrame(current_session).drop(columns=['time_event_dt'])
+                    sessions.append(session_df)
                 current_session = [event]
                 current_window_end = event_time + timedelta(hours=self.time_window_hours)
         
         # Add last session
         if current_session:
-            sessions.append(pd.DataFrame(current_session))
+            session_df = pd.DataFrame(current_session).drop(columns=['time_event_dt'])
+            sessions.append(session_df)
         
         logger.info(f"Patient {patient_id} divided into {len(sessions)} sessions")
         return sessions
@@ -239,7 +327,7 @@ class MedicalLoader:
                 cleaned_group = group[available_headers].dropna()
                 rows = cleaned_group.to_dict('records')
             elif table_type == 'ABGEvents':
-                headers = ['PatientID', 'time_event', 'abg_ventilator_mode', 'variable_name', 'value']
+                headers = ['PatientID', 'time_event', 'variable_name', 'value']
                 available_headers = [col for col in headers if col in group.columns]
                 cleaned_group = group[available_headers].dropna()
                 rows = cleaned_group.to_dict('records')
@@ -259,7 +347,10 @@ class MedicalLoader:
                 cleaned_group = group.dropna()
                 rows = cleaned_group.to_dict('records')
             
-            table_objects.append(Table(headers=available_headers, rows=rows))
+            # Create table with additional metadata
+            table = Table(headers=available_headers, rows=rows)
+            table.table_type = table_type  # Add table type as attribute
+            table_objects.append(table)
         
         return table_objects
 
@@ -283,7 +374,8 @@ class MedicalLoader:
                         {
                             "turn_id": turn.id,
                             "speaker": turn.speaker,
-                            "content": turn.content
+                            "content": turn.content,
+                            "mentioned_evidence": turn.mentioned_evidence
                         } for turn in session.turns
                     ],
                     "tables": []
@@ -293,20 +385,9 @@ class MedicalLoader:
                 for table in session.tables:
                     table_data = {
                         "headers": table.headers,
-                        "rows": []
+                        "rows": table.rows,
+                        "table_type": getattr(table, 'table_type', 'Unknown')
                     }
-                    
-                    # Convert each row of data
-                    for row in table.rows:
-                        converted_row = {}
-                        for key, value in row.items():
-                            if isinstance(value, pd.Timestamp):
-                                # Convert Timestamp to string
-                                converted_row[key] = value.strftime('%Y-%m-%d %H:%M:%S')
-                            else:
-                                converted_row[key] = value
-                        table_data["rows"].append(converted_row)
-                    
                     session_data["tables"].append(table_data)
                 
                 conv_data["sessions"].append(session_data)
@@ -337,6 +418,17 @@ def main():
                         help='Maximum events per session')
     parser.add_argument('--time_window', type=int, default=3,
                         help='Time window size (hours)')
+    parser.add_argument('--generate_pseudo_dialogue', action='store_true',
+                        help='Generate pseudo dialogues')
+    parser.add_argument('--model', type=str, default='qwen-turbo-latest',
+                        help='Model to use for dialogue generation')
+    parser.add_argument('--cache_dir', type=str, default='artifacts/med_processed/cache',
+                        help='Cache directory for generated dialogues')
+    # 新增参数
+    parser.add_argument('--max_turns', type=int, default=5,
+                        help='Maximum number of dialogue turns')
+    parser.add_argument('--is_step', action='store_true',
+                        help='Enable step-by-step generation with pauses')
     
     args = parser.parse_args()
     
@@ -345,7 +437,12 @@ def main():
         input_dir=args.input_dir,
         output_dir=args.output_dir,
         max_events_per_session=args.max_events,
-        time_window_hours=args.time_window
+        time_window_hours=args.time_window,
+        generate_pseudo_dialogue=args.generate_pseudo_dialogue,
+        model=args.model,
+        cache_dir=args.cache_dir,
+        max_turns=args.max_turns,
+        is_step=args.is_step
     )
     
     dataset = loader.load_and_process()
