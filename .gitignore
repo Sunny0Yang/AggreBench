@@ -6,3 +6,9 @@ scores
 logs/*
 *.log
 **/__pycache__
+*.pyc
+scripts/*
+temp/
+artifacts/processed/*
+artifacts/med_processed/*
+artifacts/med_qa/*

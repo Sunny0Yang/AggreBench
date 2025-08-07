@@ -6,7 +6,6 @@ import logging
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Literal, Tuple
 from pathlib import Path
-from utils.data_struct import Evidence
 # Common Difficulty Level type
 DifficultyLevel = Literal["easy", "medium", "hard"]
 
@@ -235,7 +234,7 @@ class DialogCacheManager(BaseCacheManager):
         super().__init__(cache_dir)
         self.logger = logging.getLogger(self.__class__.__name__)
 
-    def _generate_cache_key(self, evidences: List[Evidence], persona: str) -> str:
+    def _generate_cache_key(self, evidences: List[Tuple], persona: str) -> str:
         """
         根据证据列表和角色生成唯一的缓存键
         证据列表应保持排序，以确保一致的哈希值

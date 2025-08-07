@@ -5,7 +5,7 @@ import os
 import re
 import logging
 from typing import List, Dict, Tuple, Any
-from utils.data_struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset, Evidence
+from utils.data_struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset
 from utils.session_simulator import SessionSimulator
 from utils.prompt_templates import PERSONA
 
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class BizFinLoader:
     def __init__(self, model:str, max_turns:int, is_step:bool, cache_dir: str,
-                 combine_size = 10, generate_pseudo_dialogue=True,
+                 combine_size = 10, generate_pseudo_dialogue=False,
                  col_mapping: Dict[str, str] = None,
                  sname_mapping: Dict[str, str] = None
                  ):
@@ -162,7 +162,7 @@ class BizFinLoader:
             # 如果不需要伪对话，添加简单的表头信息（基于规范化后的表格）
             turns.append(MultiModalTurn(
                 turn_id=f"{session_id}_title",
-                speaker="Assistant",
+                speaker="System",
                 content=f"Session contains {len(normalized_tables)} normalized tables"
             ))
             
@@ -323,12 +323,12 @@ class BizFinLoader:
         except ValueError:
             return original_value_str
 
-    def _table_to_evidences(self, table_objects: List[Table]) -> List[Evidence]:
+    def _table_to_evidences(self, table_objects: List[Table]) -> List[Tuple]:
         """
-        把任意规范化后的 Table → List[Evidence]
+        把任意规范化后的 Table → List[Tuple]
         Evidence = Tuple[code, sname, date, value, metric]
         """
-        evidences: List[Evidence] = []
+        evidences: List[Tuple] = []
 
         for tbl in table_objects:
             required = {"code", "sname", "tdate"}

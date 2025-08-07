@@ -2,7 +2,6 @@ from typing import Any, List, Dict, Tuple
 import logging
 import re
 import math # Import math for isclose
-from utils.data_struct import Evidence
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +17,7 @@ class Validator:
 
     def compare_evidence(
             self,
-            llm_evidence: List[Evidence],
+            llm_evidence: List[Tuple],
             sql_evidence: List[dict],
         ) -> bool:
         """
@@ -31,7 +30,7 @@ class Validator:
         if len(llm_evidence) != len(sql_evidence):
             return False
 
-        def key(item: Evidence):
+        def key(item: Tuple):
             return (item[0], item[1], item[2], item[4], item[3])
 
         for left, right in zip(

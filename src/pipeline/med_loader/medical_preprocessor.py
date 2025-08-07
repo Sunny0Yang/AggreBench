@@ -4,55 +4,30 @@ import logging
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict, Tuple, Any
-from utils.data_struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset
-from utils.session_simulator import SessionSimulator
-from utils.prompt_templates import PERSONA
+from utils.data_struct import Table, Session, Conversation, ConversationDataset
 
 logger = logging.getLogger(__name__)
 
-class MedicalLoader:
+class MedicalPreprocessor:
     def __init__(self, input_dir: str, output_dir: str, 
                  max_events_per_session: int, 
-                 time_window_hours: int,
-                 generate_pseudo_dialogue: bool,
-                 model: str,
-                 cache_dir: str,
-                 max_turns: int = 5,
-                 is_step: bool = True):
+                 time_window_hours: int):
         """
-        Medical Data Loader
+        Medical Data Preprocessor
         
         Parameters:
         input_dir: Path to raw data directory
         output_dir: Path to processed output directory
         max_events_per_session: Maximum events per session
         time_window_hours: Time window size (hours)
-        generate_pseudo_dialogue: Whether to generate pseudo dialogues
-        model: Model to use for dialogue generation
-        cache_dir: Directory for caching generated dialogues
-        max_turns: Maximum number of dialogue turns (default: 5)
-        is_step: Whether to enable step-by-step generation with pauses (default: True)
         """
         self.input_dir = input_dir
         self.output_dir = output_dir
         self.max_events_per_session = max_events_per_session
         self.time_window_hours = time_window_hours
-        self.generate_pseudo_dialogue = generate_pseudo_dialogue
-        self.model = model
-        self.cache_dir = cache_dir
-        self.max_turns = max_turns
-        self.is_step = is_step
         
-        # Initialize session simulator if needed
-        if self.generate_pseudo_dialogue:
-            self.session_simulator = SessionSimulator(
-                model=self.model, 
-                max_turns=self.max_turns,
-                is_step=self.is_step,
-                cache_dir=self.cache_dir,
-                domain="medical"
-            )
-            self.persona = PERSONA["medical"]
+        # Ensure output directory exists
+        os.makedirs(self.output_dir, exist_ok=True)
         
         self.table_files = {
             'ChemistryEvents': 'ChemistryEvents.csv',
@@ -60,14 +35,10 @@ class MedicalLoader:
             'CultureEvents': 'CultureEvents.csv',
             'CBCEvents': 'CBCEvents.csv'
         }
-        
-        # Ensure output directory exists
-        os.makedirs(self.output_dir, exist_ok=True)
-        os.makedirs(self.cache_dir, exist_ok=True)
-        
-    def load_and_process(self):
-        """Load and process all table data"""
-        logger.info(f"Starting medical data processing from: {self.input_dir}")
+    
+    def preprocess(self):
+        """Preprocess medical data and save as intermediate format"""
+        logger.info(f"Starting medical data preprocessing from: {self.input_dir}")
         
         # 1. Read all table data
         all_data = {}
@@ -80,18 +51,18 @@ class MedicalLoader:
                     # Read CSV file, handle special values
                     df = pd.read_csv(file_path, low_memory=False)
                     
-                    # 在加载时立即转换时间戳为字符串
+                    # Convert timestamp to string during loading
                     if 'time_event' in df.columns:
                         df['time_event'] = pd.to_datetime(
                             df['time_event'], 
                             errors='coerce'
                         )
-                        # 转换时间戳为字符串格式
+                        # Convert timestamp to string format
                         df['time_event'] = df['time_event'].apply(
                             lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if not pd.isna(x) else ""
                         )
                     
-                    # 处理特定表格的列
+                    # Process specific table columns
                     if table_name == 'ABGEvents':
                         df['variable_name'] = df['abg_ventilator_mode'] + '-' + df['abg_name']
                         df.drop(columns=['abg_ventilator_mode', 'abg_name'], inplace=True)
@@ -148,7 +119,6 @@ class MedicalLoader:
                 
                 # Safely calculate time range
                 try:
-                    # 由于时间戳已经是字符串，我们可以直接使用字符串操作
                     min_time = min(session_data['time_event'])
                     max_time = max(session_data['time_event'])
                     time_range_str = f"{min_time} to {max_time}"
@@ -156,10 +126,16 @@ class MedicalLoader:
                     logger.error(f"Error calculating time range: {str(e)}")
                     time_range_str = "Unknown time range"
                 
-                # Generate pseudo dialogue or simple intro
-                turns = self._generate_turns_for_session(
-                    session_id, table_objects
-                )
+                # Create empty dialogue turns (pseudo dialogue generated in next step)
+                turns = [
+                    {
+                        "turn_id": f"{session_id}_intro",
+                        "speaker": "System",
+                        "content": f"Session contains {len(session_data)} medical events",
+                        "mentioned_evidence": []
+                    }
+                ]
+                
                 session_objects.append(Session(
                     session_id=session_id,
                     time=time_range_str,
@@ -188,88 +164,52 @@ class MedicalLoader:
             json.dump(patient_index, f, indent=2, ensure_ascii=False)
         logger.info(f"Saved patient index file: {index_path}")
         
-        # 7. Create and return dataset
+        # 7. Create and save dataset
         dataset = ConversationDataset(conversations=all_conversations)
-        logger.info(f"Data processing complete, generated: {len(all_conversations)} conversations")
+        self._save_preprocessed_data(dataset)
+        logger.info(f"Data preprocessing complete, generated: {len(all_conversations)} conversations")
         return dataset
     
-    def _generate_turns_for_session(self, session_id: str, tables: List[Dict]) -> List[MultiModalTurn]:
-        """
-        为会话生成对话回合
-        """
-        turns = []
+    def _save_preprocessed_data(self, dataset: ConversationDataset):
+        """Save preprocessed data"""
+        output_path = os.path.join(self.output_dir, "preprocessed_data.json")
         
-        if self.generate_pseudo_dialogue:
-            # 将表格转换为证据
-            evidences = self._tables_to_evidences(tables)
-            
-            if not evidences:
-                logger.warning(f"No valid evidences generated for session {session_id}")
-                return [MultiModalTurn(
-                    turn_id=f"{session_id}_intro",
-                    speaker="System",
-                    content=f"No valid evidences could be generated"
-                )]
-            
-            # Generate dialogue
-            logger.info(f"为会话 {session_id} 生成伪对话，共有 {len(evidences)} 条证据")
-            
-            # 设置医疗领域的persona
-            persona = PERSONA["medical"]
-
-            # 生成对话
-            dialog = self.session_simulator.generate_dialog(
-                evidences=evidences,
-                persona=persona
-            )
-            
-            # 转换为回合格式
-            for i, turn in enumerate(dialog):
-                # 确保返回MultiModalTurn对象
-                turns.append(MultiModalTurn(
-                    turn_id=turn["id"],
-                    speaker=turn["speaker"],
-                    content=turn["content"],
-                    evidence=turn.get("mentioned_evidence", [])
-                ))
-        else:
-            # 确保返回MultiModalTurn对象
-            turns.append(MultiModalTurn(
-                turn_id=f"{session_id}_intro",
-                speaker="System",
-                content=f"Session contains medical events",
-                evidence=[]
-            ))
-
-        return turns
+        serialized = []
+        for conversation in dataset.conversations:
+            conv_data = {
+                "conversation_id": conversation.id,
+                "speakers": conversation.speakers,
+                "sessions": []
+            }
+            for session in conversation.sessions:
+                session_data = {
+                    "session_id": session.id,
+                    "time": session.time,
+                    "participants": session.participants,
+                    "turns": session.turns,
+                    "tables": []
+                }
+                
+                # Process table data
+                for table in session.tables:
+                    table_data = {
+                        "headers": table.headers,
+                        "rows": table.rows,
+                        "table_type": getattr(table, 'table_type', 'Unknown')
+                    }
+                    session_data["tables"].append(table_data)
+                
+                conv_data["sessions"].append(session_data)
+            serialized.append(conv_data)
+        
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(serialized, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"Saved preprocessed data to: {output_path}")
     
-    def _tables_to_evidences(self, tables: List[Table]) -> List[Tuple]:
-        """
-        将表格转换为证据元组列表
-        Evidence = Tuple[patient_id, timestamp, table_type, ...其他值]
-        """
-        evidences = []
-        for table in tables:
-            table_type = getattr(table, "table_type", "Unknown")
-            for row in table.rows:
-                try:
-                    if isinstance(row, dict):
-                        row_values = tuple(row.values())
-                    else:
-                        row_values = tuple(row)
-                    
-                    evidence = (row_values[:2] + (str(table_type),) + row_values[2:])
-                    
-                    evidences.append(evidence)
-                    logger.debug(f"evidence:{evidence}")    
-                except Exception as e:
-                    logger.warning(f"Error creating evidence: {str(e)}")
-                    logger.debug(f"Problematic row: {row}")
-        return evidences
-
     def _create_sessions_for_patient(self, patient_id: str, patient_data: pd.DataFrame) -> List[pd.DataFrame]:
         """Create time-clustered sessions for a single patient"""
-        # 由于时间戳已经是字符串，我们需要转换为datetime进行时间计算
+        # Since timestamps are strings, convert to datetime for time calculations
         patient_data = patient_data.copy()
         patient_data['time_event_dt'] = pd.to_datetime(patient_data['time_event'], errors='coerce')
         patient_data = patient_data.dropna(subset=['time_event_dt'])
@@ -296,7 +236,7 @@ class MedicalLoader:
             else:
                 # Save current session and start new one
                 if current_session:  # Ensure session is not empty
-                    # 删除临时datetime列
+                    # Remove temporary datetime column
                     session_df = pd.DataFrame(current_session).drop(columns=['time_event_dt'])
                     sessions.append(session_df)
                 current_session = [event]
@@ -353,103 +293,3 @@ class MedicalLoader:
             table_objects.append(table)
         
         return table_objects
-
-    def save(self, dataset: ConversationDataset):
-        """Save processed dataset"""
-        output_path = os.path.join(self.output_dir, "processed_dataset.json")
-        
-        serialized = []
-        for conversation in dataset.conversations:
-            conv_data = {
-                "conversation_id": conversation.id,
-                "speakers": conversation.speakers,
-                "sessions": []
-            }
-            for session in conversation.sessions:
-                session_data = {
-                    "session_id": session.id,
-                    "time": session.time,
-                    "participants": session.participants,
-                    "turns": [
-                        {
-                            "turn_id": turn.id,
-                            "speaker": turn.speaker,
-                            "content": turn.content,
-                            "mentioned_evidence": turn.mentioned_evidence
-                        } for turn in session.turns
-                    ],
-                    "tables": []
-                }
-                
-                # Process table data
-                for table in session.tables:
-                    table_data = {
-                        "headers": table.headers,
-                        "rows": table.rows,
-                        "table_type": getattr(table, 'table_type', 'Unknown')
-                    }
-                    session_data["tables"].append(table_data)
-                
-                conv_data["sessions"].append(session_data)
-            serialized.append(conv_data)
-        
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(serialized, f, indent=2, ensure_ascii=False)
-        
-        logger.info(f"Saved processed dataset to: {output_path}")
-
-def main():
-    import argparse
-    import time
-    from utils.logger import setup_logging
-    
-    # Setup logging
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    os.environ['LOG_FILE'] = f"medical_loader_{timestamp}.log"
-    logger = setup_logging()
-    
-    # Parse arguments
-    parser = argparse.ArgumentParser(description='Medical Data Processing Tool')
-    parser.add_argument('--input_dir', type=str, default='artifacts/raw/medical',
-                        help='Path to raw data directory')
-    parser.add_argument('--output_dir', type=str, default='artifacts/med_processed',
-                        help='Path to processed output directory')
-    parser.add_argument('--max_events', type=int, default=8,
-                        help='Maximum events per session')
-    parser.add_argument('--time_window', type=int, default=3,
-                        help='Time window size (hours)')
-    parser.add_argument('--generate_pseudo_dialogue', action='store_true',
-                        help='Generate pseudo dialogues')
-    parser.add_argument('--model', type=str, default='qwen-turbo-latest',
-                        help='Model to use for dialogue generation')
-    parser.add_argument('--cache_dir', type=str, default='artifacts/med_processed/cache',
-                        help='Cache directory for generated dialogues')
-    # 新增参数
-    parser.add_argument('--max_turns', type=int, default=5,
-                        help='Maximum number of dialogue turns')
-    parser.add_argument('--is_step', action='store_true',
-                        help='Enable step-by-step generation with pauses')
-    
-    args = parser.parse_args()
-    
-    # Create loader and process data
-    loader = MedicalLoader(
-        input_dir=args.input_dir,
-        output_dir=args.output_dir,
-        max_events_per_session=args.max_events,
-        time_window_hours=args.time_window,
-        generate_pseudo_dialogue=args.generate_pseudo_dialogue,
-        model=args.model,
-        cache_dir=args.cache_dir,
-        max_turns=args.max_turns,
-        is_step=args.is_step
-    )
-    
-    dataset = loader.load_and_process()
-    if dataset:
-        loader.save(dataset)
-    
-    logger.info("Medical data processing completed")
-
-if __name__ == '__main__':
-    main()

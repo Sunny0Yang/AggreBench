@@ -1,9 +1,7 @@
 # src/utils/data_struct.py
 
-from typing import List, Dict, Tuple
+from typing import List, Dict
 # 单个对话回合表示
-Evidence = Tuple[str, str, str, float, str]
-
 class DialogueTurn:
     def __init__(self, turn_id, speaker, content):
         self.id = turn_id

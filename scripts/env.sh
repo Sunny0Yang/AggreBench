@@ -17,7 +17,7 @@ export QA_DIR="$ARTIFACTS_DIR/qa"
 export FINAL_DATASET_DIR="$ARTIFACTS_DIR/final_dataset.jsonl"
 
 # 日志配置（可覆盖）
-export LOG_LEVEL=${LOG_LEVEL:-"INFO"}
+export LOG_LEVEL=${LOG_LEVEL:-"DEBUG"}
 export LOG_DIR="$PROJECT_ROOT/logs"
 # export LOG_FILE="$ARTIFACTS_DIR/pipeline.log"
 export PYTHONPATH="$(pwd)/src:$PYTHONPATH"

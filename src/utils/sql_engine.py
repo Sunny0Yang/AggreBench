@@ -2,7 +2,7 @@ import sqlite3
 from typing import List, Dict, Tuple, Any
 import logging
 import re
-from .data_struct import Table, Evidence
+from .data_struct import Table
 
 
 class SqlEngine:
@@ -14,7 +14,7 @@ class SqlEngine:
     def create_table_from_struct(self, tables: List[Table]):
         cur = self.conn.cursor()
         # 1) 构建 Evidence (code, sname, tdate, value, metric)
-        evidence: List[Evidence] = []
+        evidence: List[Tuple] = []
         reserved = {"code", "sname", "tdate"}
         for tbl in tables:
             metric_cols = [h for h in tbl.headers if h not in reserved]
@@ -29,7 +29,7 @@ class SqlEngine:
                         continue
                     evidence.append((code, sname, tdate, val, metric))
         # 2) 按 metric 建表 & 插入        
-        grouped: dict[str, List[Evidence]] = {}
+        grouped: dict[str, List[Tuple]] = {}
         for row in evidence:
             grouped.setdefault(row[4], []).append(row)
 
