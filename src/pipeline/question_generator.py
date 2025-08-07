@@ -9,9 +9,9 @@ from typing import Any, List, Dict, Literal, Tuple, Union
 
 from utils.params import get_base_parser, qa_generation_args
 from utils.logger import setup_logging
-from utils.prompt_templates import QA_GENERATION_PROMPTS
+from utils.prompt_templates import QA_GENERATION_PROMPTS, SYSTEM_PROMPTS
 from client.llm_client import client
-from utils.data_struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset, Evidence, load_data, save_results
+from utils.data_struct import MultiModalTurn, Table, Session, Conversation, ConversationDataset, load_data, save_results
 from utils.cache_manager import QACacheManager, DifficultyLevel
 from utils.sql_engine import SqlEngine
 from utils.validator import Validator
@@ -23,7 +23,8 @@ class QuestionGenerator:
                  min_evidences=10, max_evidences=15,
                  cache_dir: str = "./qa_generation_cache", is_step=False,
                  max_preferred_examples: int = 3,
-                 max_disliked_examples: int = 3):
+                 max_disliked_examples: int = 3,
+                 domain: str = "medical"):
         self.model = model
         self.min_sessions = min_sessions
         self.max_sessions = max_sessions
@@ -36,6 +37,7 @@ class QuestionGenerator:
         self.is_step = is_step
         self.max_preferred_examples = max_preferred_examples
         self.max_disliked_examples = max_disliked_examples
+        self.domain = domain  # 添加领域标识
 
     def batch_generate(self, dataset: ConversationDataset, difficulty_counts: Dict[DifficultyLevel, int]):
         """
@@ -91,7 +93,7 @@ class QuestionGenerator:
 
         # Prepare context for LLM
         session_context = self._build_session_context(selected_sessions)
-        
+        self.logger.debug(f"session_context:\n{session_context}")
         # Get guidance QAs
         # positive examples (status="liked")
         preferred_qas = self.cache_manager.get_preferred_qas(self.difficulty)
@@ -101,7 +103,7 @@ class QuestionGenerator:
             preferred_qas=preferred_qas,
             disliked_qas=disliked_qas
         )
-
+        self.logger.debug(f"additional_guidance:\n{additional_guidance}")
         qa_response = self._generate_llm_qa(session_context, additional_guidance)
         if not qa_response:
             self.logger.warning("LLM did not return a valid response.")
@@ -118,6 +120,7 @@ class QuestionGenerator:
         qa_dict["difficulty"] = self.difficulty
         qa_dict["qa_id"] = self.cache_manager.generate_qa_id(qa_dict)
         qa_dict["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        qa_dict["domain"] = self.domain  # 添加领域标识
 
         if self.is_step:
             print("\n--- Step-by-step mode: New QA Generated. ---")
@@ -158,18 +161,17 @@ class QuestionGenerator:
                 for idx, table in enumerate(session.tables):
                     context += f"Table {idx} (Headers: {', '.join(table.headers)}):\n"
                     for row_idx, row in enumerate(table.rows):
-                        code  = str(row.get("code",  ""))
-                        sname = str(row.get("sname", ""))
-                        tdate = str(row.get("tdate", ""))
-                        reserved = {"code", "sname", "tdate"}
-                        metric_cols = [h for h in table.headers if h not in reserved]
-                        for metric in metric_cols:
-                            try:
-                                val = float(row.get(metric, 0.0))
-                            except (TypeError, ValueError):
-                                val = "NaN"
-                            tup = (code, sname, tdate, val, metric)
-                            context += f"  Row {row_idx}: {tup}\n"
+                        # 通用行表示方法，不依赖特定列名
+                        if isinstance(row, dict):
+                            # 字典格式的行
+                            row_str = ", ".join(f"{k}: {v}" for k, v in row.items())
+                        elif isinstance(row, list):
+                            # 列表格式的行，与表头对应
+                            row_str = ", ".join(f"{header}: {value}" for header, value in zip(table.headers, row))
+                        else:
+                            row_str = str(row)
+                        
+                        context += f"  Row {row_idx}: {row_str}\n"
             else:
                 self.logger.debug(f"会话 {session.id} 构建对话上下文")
                 context += f"Time: {session.time}\n"
@@ -232,18 +234,15 @@ class QuestionGenerator:
 
     def _generate_llm_qa(self, session_context: str, additional_guidance: str) -> str:
         """生成单个QA对"""
-        is_structured = "structured table" in session_context.lower()
-        if is_structured:
-            prompt_template_key = f"structured_{self.difficulty}_template_en"
-            system_role = "You are a structured data analyst specializing in generating aggregation queries on structured tables."
-        else:
-            prompt_template_key = f"conversational_{self.difficulty}_template_en"
-            system_role = "You are a conversation analyst specializing in generating aggregation queries on conversational data."
+        domain = self.domain
+        # 获取系统提示
+        system_role = SYSTEM_PROMPTS.get(domain, "")
+        template_key = f"{domain}_structured_{self.difficulty}_template_en"
 
-        if prompt_template_key not in QA_GENERATION_PROMPTS:
-            self.logger.warning(f"未找到模板 '{prompt_template_key}'，使用默认模板")
-            prompt_template_key = "structured_medium_template_en" if is_structured else "conversational_medium_template_en"
-        prompt = QA_GENERATION_PROMPTS[prompt_template_key].format(
+        if template_key not in QA_GENERATION_PROMPTS:
+            self.logger.error(f"未找到模板 '{template_key}'，使用默认模板")
+            raise ValueError(f"未找到模板 '{template_key}'")
+        prompt = QA_GENERATION_PROMPTS[template_key].format(
             session_context=session_context,
             session_threshold=self.session_threshold,
             min_evidences=self.min_evidences,
@@ -256,7 +255,7 @@ class QuestionGenerator:
             {"role": "system", "content": system_role},
             {"role": "user", "content": prompt},
         ]
-
+        self.logger.debug(f"Prompt:{messages}")
         self.logger.info(f"正在为难度 '{self.difficulty}' 生成QA...")
         completion = client.chat.completions.create(
             model=self.model,
@@ -278,7 +277,7 @@ class QuestionGenerator:
         {
             "question_text": str,
             "answer_text": float | int,
-            "evidence": List[Tuple[str, str, str, float, str]]
+            "evidence": List[Dict]  # 改为字典列表，更灵活
         }
         """
         try:
@@ -305,29 +304,32 @@ class QuestionGenerator:
             else:
                 answer_text = 0.0
 
-            raw_evi = data.get("evidence", [])
-            evidence: List[Tuple[str, str, str, float, str]] = []
-
-            for item in raw_evi:
-                if isinstance(item, list) and len(item) == 5:
-                    code, sname, tdate, val, flow_col = item
-                    evidence.append(
-                        (str(code), str(sname), str(tdate), float(val), str(flow_col))
-                    )
-                elif isinstance(item, str):
+            # 使用字典列表存储证据，更灵活
+            evidence = data.get("evidence", [])
+            if not isinstance(evidence, list):
+                evidence = []
+            
+            # 确保每个证据项是字典
+            validated_evidence = []
+            for item in evidence:
+                if isinstance(item, dict):
+                    validated_evidence.append(item)
+                elif isinstance(item, list):
+                    # 尝试转换为字典
                     try:
-                        parsed = json.loads(item)
-                        if isinstance(parsed, list) and len(parsed) == 5:
-                            code, sname, tdate, val, flow_col = parsed
-                            evidence.append(
-                                (str(code), str(sname), str(tdate), float(val), str(flow_col))
-                            )
-                    except Exception:
-                        continue
+                        if len(item) == 2:  # 键值对列表
+                            validated_evidence.append(dict(item))
+                        else:  # 无法转换，保留原始格式
+                            validated_evidence.append({"raw": item})
+                    except:
+                        validated_evidence.append({"raw": item})
+                else:
+                    validated_evidence.append({"raw": item})
+            
             return {
                 "question_text": question_text,
                 "answer_text": answer_text,
-                "evidence": evidence
+                "evidence": validated_evidence
             }
         except Exception as e:
             self.logger.error(f"解析响应时发生错误: {e}")
@@ -337,10 +339,11 @@ class BatchValidator:
     """
     负责对已生成的问题答案对进行SQL验证和智能修正的类。
     """
-    def __init__(self, model: str):
+    def __init__(self, model: str, domain: str = "financial"):
         self.sql_engine = SqlEngine()
         self.validator = Validator()
         self.model = model
+        self.domain = domain  # 添加领域标识
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def validate_qas(self, cache_manager: QACacheManager, dataset: ConversationDataset, is_step: bool):
@@ -357,21 +360,14 @@ class BatchValidator:
         # Get all generated/liked QAs that haven't been successfully SQL verified
         qas_to_validate = [
             qa for qa in cache_manager.get_exportable_qas()
-            if qa.get("sql_info", {}).get("sql_status") not in {"match","evidence_not_match","answer_not_match; evidence_not_match"}
+            if qa.get("sql_info", {}).get("sql_status") not in {"match","evidence_not_match"}
         ]
         self.logger.info(f"Found {len(qas_to_validate)} QAs to validate.")
 
         for qa_item in qas_to_validate:
             question = qa_item.get("question_text")
             answer_llm = qa_item.get("answer_text")
-            # 列表转元组
-            raw_evi = qa_item.get("evidence")
-            # if isinstance(raw_evi, list) and raw_evi and isinstance(raw_evi[0], list):
-            #     evidence_llm = [tuple(r) for r in raw_evi] 
-            # else:
-            #     evidence_llm = []
-            #     self.logger.warning(f"Evidence for QA {qa_item.get('qa_id')} is not in the expected format.")
-            evidence_llm = [tuple(r) for r in raw_evi]
+            evidence_llm = qa_item.get("evidence", [])
 
             conversation_id = qa_item.get("conversation_id")
             session_ids = qa_item.get("session_ids")
@@ -411,12 +407,12 @@ class BatchValidator:
             self.logger.info(f"QA {qa_item.get('qa_id')} validation complete. Status: {sql_info.get('sql_status')}")
 
     def validate_and_correct(self, question: str, answer_llm: Any, 
-                             evidence_llm: List[Evidence], sessions: List[Session]) -> Dict:
+                             evidence_llm: List[Dict], sessions: List[Session]) -> Dict:
         """
         执行验证：LLM生成的SQL查询与数据库结果对比。
         """
         result = {
-            "sql_status": "not yet",
+            "sql_status": "not_yet",
             "sql_answer_query": None,
             "sql_evidence_query": None,
             "sql_answer": None,
@@ -429,61 +425,37 @@ class BatchValidator:
             if session.tables:
                 tables.extend(session.tables)
         if not tables:
-            self.logger.warning(f"没有可用的表格数据，跳过SQL验证。")
+            self.logger.warning(f"No tables available, skipping SQL validation.")
             result["sql_status"] = "skipped"
             return result
         
         try:
-            # Create table in memory for the current validation context
-            self.sql_engine.create_table_from_struct(tables)
-            self.logger.info(f"成功创建内存表并填充数据。")
-
-            # Generate SQL queries using LLM
-            sql_prompt = self._generate_sql_prompt(question, tables)
+            # 创建统一表
+            self.logger.debug(f"###Tables###:{tables}")
+            self.sql_engine.create_table_from_struct(tables, domain=self.domain)
+            
+            # 生成SQL查询
+            sql_prompt = self._generate_sql_prompt(question, self.domain)
             full_sql = self._generate_sql_from_llm(sql_prompt)
-
-            # Parse dual queries (answer and evidence)
+            
+            # 解析双查询
             answer_query, evidence_query = self._parse_double_query(full_sql)
             result["sql_answer_query"] = answer_query
             result["sql_evidence_query"] = evidence_query
-            self.logger.debug(f"Answer SQL: {answer_query}")
-            self.logger.debug(f"Evidence SQL: {evidence_query}")
-            print("\n【请检查以下查询】")
-            print("Answer Query:")
-            print(answer_query)
-            print("\nEvidence Query:")
-            print(evidence_query)
-            confirm = input("\n是否满意？(回车=满意 / 其他=不满意并手动输入查询) ").strip()
-
-            if confirm:          # 用户输入了内容 -> 不满意
-                print("请输入新的 Answer Query：")
-                answer_query = input("> ").strip()
-                print("请输入新的 Evidence Query：")
-                evidence_query = input("> ").strip()
-                result["sql_answer_query"] = answer_query
-                result["sql_evidence_query"] = evidence_query
-
-            # Execute answer query
-            answer_results = self.sql_engine.execute_query(answer_query)
-            answer_sql = answer_results[0][list(answer_results[0].keys())[0]] if answer_results and list(answer_results[0].keys()) else None
-            self.logger.debug(f"Answer SQL Result: {answer_sql}")
             
-            # Execute evidence query
+            # 执行答案查询
+            answer_results = self.sql_engine.execute_query(answer_query)
+            answer_sql = answer_results[0][list(answer_results[0].keys())[0]] if answer_results and answer_results[0] else None
+            result["sql_answer"] = answer_sql
+            
+            # 执行证据查询
             evidence_results = self.sql_engine.execute_query(evidence_query)
-            self.logger.debug(f"Evidence Raw SQL Result: {evidence_results}")
-            evidence_sql_rows: List[Evidence] = [
-                    (str(r.get("code","")), str(r.get("sname","")), str(r.get("tdate","")),
-                    float(r.get("value",0)),
-                    str(r.get("suffix","")))
-                    for r in evidence_results
-                ]
-            self.logger.debug(f"Evidence SQL Rows: {evidence_sql_rows}")
-
-            # Perform two-stage validation
-            self.logger.info(f"开始对比验证。")
+            result["sql_evidence"] = evidence_results
+            
+            # 执行验证
             answer_match = self.validator.compare_answers(answer_llm, answer_sql)
-            evidence_match = self.validator.compare_evidence(evidence_llm, evidence_sql_rows)
-
+            evidence_match = self.validator.compare_evidence(evidence_llm, evidence_results, self.domain)
+            
             if answer_match and evidence_match:
                 result["sql_status"] = "match"
             else:
@@ -494,119 +466,107 @@ class BatchValidator:
                     status_parts.append("evidence_not_match")
                 result["sql_status"] = "; ".join(status_parts)
             
-            result["sql_answer"] = answer_sql
-            result["sql_evidence"] = evidence_sql_rows
-
         except Exception as e:
-            self.logger.error(f"SQL验证失败: {e}", exc_info=True)
+            self.logger.error(f"SQL validation failed: {str(e)}")
             result["sql_status"] = "failed"
             result["error"] = str(e)
-
+        
         return result
 
-    def _generate_sql_prompt(self, question: str, tables: List[Table]) -> str:
-        from collections import defaultdict
-        metric_to_rows: Dict[str, List[Dict]] = defaultdict(list)
-        for tbl in tables:
-            reserved = {"code", "sname", "tdate"}
-            metric_cols = [h for h in tbl.headers if h not in reserved]
-
-            for row in tbl.rows:
-                for metric in metric_cols:
-                    val = row.get(metric)
-                    try:
-                        float(val)
-                    except (TypeError, ValueError):
-                        continue
-                    # 深拷贝避免污染原数据
-                    new_row = {
-                        "code":  str(row.get("code",  "")),
-                        "sname": str(row.get("sname", "")),
-                        "tdate": str(row.get("tdate", "")),
-                        "value": float(val),
-                    }
-                    metric_to_rows[metric].append(new_row)
-
-        # 2) 生成描述文本
-        context_lines = []
-        for metric, rows in metric_to_rows.items():
-            table_name = f"Table_{metric}"
-            context_lines.append(
-                f'{table_name} (Columns: "code" TEXT, "sname" TEXT, "tdate" TEXT, "value" REAL):\n'
-            )
-            if rows:
-                sample = rows[0]
-                sample_str = ", ".join(f'{k}: {v}' for k, v in sample.items())
-                context_lines.append(f"Sample Row: {sample_str}\n")
-
-        context = "".join(context_lines)
-        return QA_GENERATION_PROMPTS["sql_prompt_template"].format(
-            question=question,
-            tables=context
-        )
+    def _generate_sql_prompt(self, question: str, domain: str) -> str:
+        """根据领域生成SQL提示"""
+        if domain == "financial":
+            return f"""
+            ### Financial SQL Generation
+            You are a financial SQL expert. Generate two SQL queries for the following question:
+            Question: {question}
+            
+            Database Schema:
+            Table: unified_data
+            Columns: code (TEXT), sname (TEXT), tdate (TEXT), value (REAL), metric (TEXT)
+            
+            Requirements:
+            1. First query (SQL_ANSWER): Calculate the answer to the question.
+            2. Second query (SQL_EVIDENCE): Retrieve all evidence rows used in the calculation.
+            3. Output both queries in the format:
+                SQL_ANSWER: [query];
+                SQL_EVIDENCE: [query];
+            """
+        elif domain == "medical":
+            return f"""
+            ### Medical SQL Generation
+            You are a medical SQL expert. Generate two SQL queries for the following question:
+            Question: {question}
+            
+            Database Schema:
+            Table: unified_data
+            Columns: patient_id (TEXT), timestamp (TEXT), variable_name (TEXT), value (REAL), table_type (TEXT)
+            
+            Requirements:
+            1. First query (SQL_ANSWER): Calculate the answer to the question.
+            2. Second query (SQL_EVIDENCE): Retrieve all evidence rows used in the calculation.
+            3. Output both queries in the format:
+                SQL_ANSWER: [query];
+                SQL_EVIDENCE: [query];
+            """
+        else:
+            return f"""
+            ### Generic SQL Generation
+            Generate two SQL queries for the following question:
+            Question: {question}
+            
+            Database Schema:
+            Table: unified_data
+            Columns: entity_id (TEXT), timestamp (TEXT), variable_name (TEXT), value (REAL), table_type (TEXT)
+            
+            Requirements:
+            1. First query (SQL_ANSWER): Calculate the answer to the question.
+            2. Second query (SQL_EVIDENCE): Retrieve all evidence rows used in the calculation.
+            3. Output both queries in the format:
+                SQL_ANSWER: [query];
+                SQL_EVIDENCE: [query];
+            """
 
     def _generate_sql_from_llm(self, prompt: str) -> str:
         """使用LLM生成双查询SQL语句"""
         messages = [
-            {"role": "system", "content": "你是一个SQL专家，专门将自然语言问题转换为SQL查询。请严格按照要求返回两个SQL查询语句：第一个用于获取问题的答案，第二个用于获取支持答案的证据。每个查询必须在新的一行开始，并以 `;` 结尾。"},
+            {"role": "system", "content": "You are an SQL expert. Generate two SQL queries: one for the answer and one for the evidence."},
             {"role": "user", "content": prompt}
         ]
         try:
-            # 设置max_tokens为1024，避免生成中断
-            self.logger.debug(f"LLM Prompt: {prompt}")
             completion = client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 stream=False,
                 extra_body={"enable_thinking": False}
             )
-            response_content = completion.choices[0].message.content
-
-            self.logger.debug(f"Full API response: {response_content}")
-            return response_content
+            return completion.choices[0].message.content
         except Exception as e:
-            self.logger.error(f"SQL生成失败: {e}")
+            self.logger.error(f"SQL generation failed: {e}")
             return None
 
     def _parse_double_query(self, full_sql: str) -> Tuple[str, str]:
-        """解析LLM生成的包含SQL_ANSWER和SQL_EVIDENCE的双查询字符串。"""
-        self.logger.debug(f"Raw SQL response: {full_sql}")
-        answer_sql = ""
-        evidence_sql = ""
-        answer_match = re.search(
-            r'SQL_ANSWER:\s*(.*?)(?=(?:SQL_EVIDENCE:|$))', 
-            full_sql,
-            re.DOTALL | re.IGNORECASE
-        )
-
-        evidence_match = re.search(
-            r'SQL_EVIDENCE:\s*(.*)',
-            full_sql,
-            re.DOTALL | re.IGNORECASE
-        )
-
-        if answer_match:
-            answer_sql = self._clean_sql(answer_match.group(1))
-        if evidence_match:
-            evidence_sql = self._clean_sql(evidence_match.group(1))
-
-        if not answer_sql or not evidence_sql:
-            self.logger.error(f"未能解析LLM的SQL响应，格式不正确或缺少SQL。原始文本:\n{full_sql}")
-            raise ValueError("未能解析LLM的SQL响应，格式不正确或缺少SQL。")
-        return answer_sql, evidence_sql
+        """解析LLM生成的包含SQL_ANSWER和SQL_EVIDENCE的双查询字符串"""
+        # 尝试解析标准格式
+        answer_match = re.search(r'SQL_ANSWER:\s*(.*?)(?=SQL_EVIDENCE:|$)', full_sql, re.DOTALL | re.IGNORECASE)
+        evidence_match = re.search(r'SQL_EVIDENCE:\s*(.*)', full_sql, re.DOTALL | re.IGNORECASE)
+        
+        if answer_match and evidence_match:
+            return self._clean_sql(answer_match.group(1)), self._clean_sql(evidence_match.group(1))
+        
+        # 尝试解析SQL语句
+        sql_statements = [s.strip() for s in full_sql.split(';') if s.strip()]
+        if len(sql_statements) >= 2:
+            return sql_statements[0], sql_statements[1]
+        
+        # 无法解析，返回错误
+        self.logger.error(f"Failed to parse SQL response: {full_sql}")
+        raise ValueError("Failed to parse SQL response")
 
     def _clean_sql(self, sql_string: str) -> str:
-        """清理LLM返回的SQL字符串，移除Markdown代码块标记和多余的空白。"""
-        cleaned = re.sub(r'^\s*```(?:sql)?\s*|\s*```\s*$', '', sql_string, flags=re.IGNORECASE | re.DOTALL)
-        cleaned = cleaned.strip()
-        statements = [s.strip() for s in cleaned.split(';') if s.strip()]
-        if len(statements) > 1:
-            self.logger.warning(f"检测到多个SQL语句，只使用第一个: '{cleaned}'")
-            return statements[0]
-        elif statements:
-            return statements[0]
-        else:
-            return ""
+        """清理SQL字符串，移除Markdown代码块标记和多余空格"""
+        cleaned = re.sub(r'^\s*```(?:sql)?\s*|\s*```\s*$', '', sql_string, flags=re.IGNORECASE)
+        return cleaned.strip()
 
 def main():
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -643,7 +603,8 @@ def main():
             is_step=args.is_step,
             max_preferred_examples=args.max_preferred_examples,
             max_disliked_examples=args.max_disliked_examples,
-            cache_dir=args.cache_dir
+            cache_dir=args.cache_dir,
+            domain=args.domain,
         )
         
         qa_generator.batch_generate(dataset, difficulty_counts) 
@@ -651,7 +612,7 @@ def main():
         # --- Second Stage: Validation (Optional) ---
         if args.enable_validation:
             logger.info("Enabling QA validation process.")
-            batch_validator = BatchValidator(model=args.model)
+            batch_validator = BatchValidator(model=args.model, domain=args.domain)
             batch_validator.validate_qas(qa_generator.cache_manager, dataset, args.is_step)
             logger.info("QA validation process completed.")
 

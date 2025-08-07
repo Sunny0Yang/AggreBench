@@ -38,9 +38,10 @@ class MultiModalTurn:
 
 class Table:
     """表格数据结构"""
-    def __init__(self, headers: List[str], rows: List[Dict[str, str]]):
+    def __init__(self, headers: List[str], rows: List[Dict[str, str]], table_type=""):
         self.headers = headers  # 表头列表
         self.rows = rows        # 行数据列表（每行是一个字典）
+        self.table_type = table_type  # 表格类型
     
     def __str__(self):
         return f"Table(headers={self.headers}, rows={len(self.rows)})"
@@ -90,7 +91,8 @@ def load_data(input_path: str) -> ConversationDataset:
                 for table_data in session_data.get("tables", []):
                     headers = table_data.get("headers", [])
                     rows = table_data.get("rows", [])
-                    table = Table(headers=headers, rows=rows)
+                    table_type = table_data.get("table_type", "")  # 获取table_typ
+                    table = Table(headers=headers, rows=rows, table_type=table_type)
                     tables.append(table)
 
                 session = Session(

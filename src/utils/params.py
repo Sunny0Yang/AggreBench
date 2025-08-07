@@ -81,6 +81,8 @@ def qa_generation_args(parser: argparse.ArgumentParser):
                         help='Maximum number of "disliked" QA examples to include in the LLM prompt as negative guidance. Set to 0 to exclude.')
     parser.add_argument('--enable_validation', action='store_true', 
                         help='Enable the second stage SQL validation process.')
+    parser.add_argument('--domain', type=str,
+                        help='Domain of the dataset.(financial,medical)')
     # parser.add_argument('--semantic_similarity_threshold', type=float, default=0.8,
     #                     help='Cosine similarity threshold for marking a newly generated question as a semantic duplicate of an existing one. Range: 0.0 to 1.0.')
     # parser.add_argument('--embedding_model_name', type=str, default='all-MiniLM-L6-v2',
