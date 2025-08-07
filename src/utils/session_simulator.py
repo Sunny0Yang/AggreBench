@@ -10,7 +10,6 @@ from pathlib import Path
 from utils.prompt_templates import SESSION_SIMULATOR_PROMPT
 from client.llm_client import client
 from utils.cache_manager import DialogCacheManager
-from utils.data_struct import Evidence
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +18,8 @@ class SessionSimulator:
                  model: str,
                  max_turns: int = 6,
                  is_step: bool = True,
-                 cache_dir: str = "./dialog_cache"):
+                 cache_dir: str = "./dialog_cache",
+                 domain: str = "financial"):
         """
         会话模拟器初始化
 
@@ -27,6 +27,7 @@ class SessionSimulator:
         :param max_turns: 最大对话轮次
         :param is_step: 是否启用暂停机制，True 为启用，每次轮次结束后暂停
         :param cache_dir: 对话缓存目录
+        :param domain: 领域类型，如 "financial" 或 "medical"，用于确定证据格式
         """
         self.model = model
         self.max_turns = max_turns
@@ -34,9 +35,10 @@ class SessionSimulator:
         self.cache_manager = DialogCacheManager(cache_dir)
         self.current_state: Dict = {}
         self.current_dialog: List[Dict] = []
+        self.domain = domain
 
     def generate_dialog(self,
-                        evidences: List[Evidence],
+                        evidences: List[Tuple],
                         persona: str) -> List[Dict]:
         """
         生成伪对话
@@ -45,6 +47,7 @@ class SessionSimulator:
         :param persona: 用户人格描述
         :return: 对话回合列表
         """
+        logger.debug(f"Persona: {persona}")
         # Load cache based on evidences and persona
         self.cache_manager.load_cache(evidences, persona)
         
@@ -74,7 +77,8 @@ class SessionSimulator:
                 "evidences": evidences,
                 "persona": persona,
                 "turn_count": 0,
-                "remaining_evidences": list(evidences)
+                "remaining_evidences": list(evidences),
+                "domain": self.domain
             }
             self.current_dialog = [
                 {
@@ -89,6 +93,9 @@ class SessionSimulator:
         else:
             logger.info(f"从缓存恢复会话: {self.current_state['session_hash']}")
             logger.info(f"当前轮次: {self.current_state['turn_count']}/{self.max_turns}")
+            # 如果缓存中没有domain字段，添加默认值
+            if "domain" not in self.current_state:
+                self.current_state["domain"] = self.domain
 
         # 从加载的状态中获取当前轮次
         current_turn = self.current_state["turn_count"]
@@ -126,9 +133,15 @@ class SessionSimulator:
             if self.current_dialog:
                 last_turn_for_user_prompt = f"{self.current_dialog[-1]['speaker']}: {self.current_dialog[-1]['content']}"
 
-            user_prompt = SESSION_SIMULATOR_PROMPT["user"].format(
-                evidences="\n".join(f"- {e}" for e in self.current_state["remaining_evidences"]),
-                persona=self.current_state["persona"],
+            # 根据领域选择不同的提示模板
+            user_prompt_template = SESSION_SIMULATOR_PROMPT[self.domain]["user"]
+            
+            # 格式化证据列表，根据领域不同有不同的格式
+            evidences_str = self._format_evidences_for_prompt(self.current_state["remaining_evidences"], self.current_state.get("domain", "financial"))
+            
+            user_prompt = user_prompt_template.format(
+                evidences=evidences_str,
+                persona=self.current_state["persona"]["user"],
                 last_turn_content=last_turn_for_user_prompt
             )
             if current_turn == self.max_turns - 1 and self.current_state["remaining_evidences"]:
@@ -150,8 +163,15 @@ class SessionSimulator:
             self.update_remaining_evidences(mentioned_by_user, 'user')
 
             # --- Prepare context for Assistant LLM ---
-            assistant_prompt = SESSION_SIMULATOR_PROMPT["assistant"].format(
-                evidences="\n".join(f"- {e}" for e in self.current_state["remaining_evidences"]),
+            # 根据领域选择不同的提示模板
+            assistant_prompt_template = SESSION_SIMULATOR_PROMPT[self.domain]["assistant"]
+            
+            # 格式化证据列表，根据领域不同有不同的格式
+            evidences_str = self._format_evidences_for_prompt(self.current_state["remaining_evidences"], self.current_state.get("domain", "financial"))
+            
+            assistant_prompt = assistant_prompt_template.format(
+                persona=self.current_state["persona"]["assistant"],
+                evidences=evidences_str,
                 last_turn_content=user_response_content,
             )
             logger.debug(f"assistant_prompt: {assistant_prompt}")
@@ -195,15 +215,31 @@ class SessionSimulator:
             logger.error(f"LLM 调用失败: {e}")
             return "对不起，我暂时无法回应。"
 
-    def _extract_and_clean_llm_response(self, raw: str) -> Tuple[str, List[Evidence]]:
+    def _format_evidences_for_prompt(self, evidences: List[Tuple], domain: str) -> str:
+        """
+        根据不同领域格式化证据列表为提示词中的字符串
+        
+        :param evidences: 证据列表
+        :param domain: 领域类型，如 "financial" 或 "medical"
+        :return: 格式化后的证据字符串
+        """
+        if domain == "medical":
+            # 医疗领域的证据格式化：(patient_id, timestamp, table_type, variable_name, value)
+            return "Evidence format: (patient_id, timestamp, table_type, variable_name, value)\n" + \
+                   "\n".join(f"- {e}" for e in evidences)
+        else:
+            # 金融领域的证据格式化：(code, sname, date, value, metric)#兼容原有逻辑
+            return "\n".join(f"- {e}" for e in evidences)
+
+    def _extract_and_clean_llm_response(self, raw: str) -> Tuple[str, List[Tuple]]:
         """
         清理对话内容 + 把 LLM 标记的证据解析成 Evidence 元组
         """
         pattern = r"EVIDENCES_USED_IN_THIS_TURN:\s*\r?\n(.*?)(?=\r?\n---|$)"
         match = re.search(pattern, raw, re.DOTALL)
-
+    
         content = raw
-        evidences: List[Evidence] = []
+        evidences: List[Tuple] = []
         if match:
             # Content is everything before the EVIDENCES_USED_IN_THIS_TURN block
             content = raw[:match.start()].strip()
@@ -215,11 +251,21 @@ class SessionSimulator:
                     try:
                         # Directly evaluate the payload as a tuple
                         parsed_item = ast.literal_eval(payload)
-                        # Ensure it's a tuple and has 5 elements as per Evidence type
-                        if isinstance(parsed_item, tuple) and len(parsed_item) == 5:
-                            evidences.append(parsed_item)
+                        # 确保它是一个元组
+                        if isinstance(parsed_item, tuple):
+                            # 对于医疗领域，确保是5元素元组
+                            if self.current_state.get("domain") == "medical" and len(parsed_item) == 5:
+                                evidences.append(parsed_item)
+                            # 对于金融领域，确保是5元素元组
+                            elif self.current_state.get("domain") == "financial" and len(parsed_item) == 5:
+                                evidences.append(parsed_item)
+                            # 对于其他领域或结构，只要是元组就接受
+                            elif self.current_state.get("domain", "") not in ["medical", "financial"]:
+                                evidences.append(parsed_item)
+                            else:
+                                logger.warning(f"Parsed item from LLM does not match expected structure for domain {self.current_state.get('domain')}, skipping: {parsed_item}")
                         else:
-                            logger.warning(f"Parsed item from LLM is not a 5-element tuple, skipping: {parsed_item}")
+                            logger.warning(f"Parsed item from LLM is not a tuple, skipping: {parsed_item}")
                     except (ValueError, SyntaxError) as e:
                         logger.warning(f"无法解析证据字符串 '{payload}': {e}")
         return content, evidences
@@ -233,7 +279,7 @@ class SessionSimulator:
             formatted_history.append(f"{entry['speaker']}: {entry['content']}")
         return "\n".join(formatted_history)
 
-    def _filter_remaining_evidences(self, remaining_evidences: List[Evidence], mentioned_evidences: List[Evidence], role: str) -> List[Evidence]:
+    def _filter_remaining_evidences(self, remaining_evidences: List[Tuple], mentioned_evidences: List[Tuple], role: str) -> List[Tuple]:
         mentioned_set = set(mentioned_evidences)
         filtered = [ev for ev in remaining_evidences if ev not in mentioned_set]
         for ev in remaining_evidences:

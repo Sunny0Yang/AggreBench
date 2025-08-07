@@ -1,16 +1,56 @@
 from typing import Dict
+# 在utils/prompt_templates.py中
+SYSTEM_PROMPTS = {
+    "financial": "You are a financial data analyst specializing in generating aggregation queries on structured financial tables. Your questions should focus on financial metrics like capital flows, stock performance, and market trends.",
 
-QA_GENERATION_PROMPTS: Dict[str, str] =({
-    "structured_easy_template_en": """
-### Task: Generate Simple Aggregative Query Question
-Please generate a *simple, direct* aggregative query question based on the provided structured table data.
-This question should require a single, straightforward aggregation (e.g., COUNT, SUM, AVG, MAX, MIN) focusing on one specific column.
-### Available Information(values are in RMB million)
+    "medical": "You are a medical data analyst with clinical expertise. Generate clinically meaningful questions based on structured medical data. Frame questions in the context of patient care and clinical decision-making.",
+}
+QA_GENERATION_PROMPTS = ({
+    # 金融领域 - 简单难度（具体值查询）
+    "financial_structured_easy_template_en": """
+### Task: Generate Specific Value Query
+Generate a question that retrieves a specific value from the structured financial data.
+Focus on retrieving a single data point without aggregation.
+
+### Available Information (values in RMB million)
 {session_context}
 
 ### Rules
-1. Operation: exactly one aggregate function.  
-2. Scope: single column + explicit date range (e.g. “Dec 1-7 2023”).  
+1. Question must retrieve a single, specific value from the data
+2. Must specify the exact entity and time point
+3. Output JSON only:
+{{
+  "question": "...?",
+  "answer": <float | int>,
+  "evidence": [
+    ["code", "sname", "YYYY-MM-DD", <value>, <metric>]
+  ]
+}}
+4. Evidence must contain exactly one row used in the answer
+5. `answer` is the raw numeric result
+
+### Example
+{{
+  "question": "What was the net capital flow for Tonghuashun on December 1, 2023?",
+  "answer": 279000000.00,
+  "evidence": [
+    ["300033.SZ", "Tonghuashun", "2023-12-01", 279000000.00, "net_flow"]
+  ]
+}}
+""",
+    
+    # 金融领域 - 中等难度（简单聚合）
+    "financial_structured_medium_template_en": """
+### Task: Generate Simple Aggregation Query
+Generate a question that requires a simple aggregation (SUM, AVG, COUNT, MIN, MAX) 
+over multiple values from the structured financial data.
+
+### Available Information (values in RMB million)
+{session_context}
+
+### Rules
+1. Question must involve a single aggregation function
+2. Must specify a clear time range or entity group
 3. Output JSON only:
 {{
   "question": "...?",
@@ -20,13 +60,12 @@ This question should require a single, straightforward aggregation (e.g., COUNT,
     ...
   ]
 }}
-4. Evidence must cover **all rows** used in the aggregation.  
-5. `answer` is the raw numeric result.  
-6. Ensure each evidence entry is a **5-tuple** with a **float** numeric value.
+4. Evidence must cover all rows used in the aggregation
+5. `answer` is the raw numeric result
 
 ### Example
 {{
-  "question": "What was the total net capital flow for Tonghuashun from Dec 1-7 2023?",
+  "question": "What was the total net capital flow for Tonghuashun from December 1-7, 2023?",
   "answer": -156442.27,
   "evidence": [
     ["300033.SZ", "Tonghuashun", "2023-12-01", 279000000.00, "net_flow"],
@@ -37,20 +76,18 @@ This question should require a single, straightforward aggregation (e.g., COUNT,
 }}
 """,
     
-    "structured_medium_template_en": """
-### Task: Generate Medium Difficulty Aggregative Query Question
-Please generate an aggregative query question of *medium difficulty* based on the provided structured table data.
-This question should involve either:
-- A two-step aggregation (e.g., AVG requires SUM and COUNT implicitly).
-- Aggregation on one column with simple filtering conditions.
-- Simple comparison between two aggregated values from the same table.
+    # 金融领域 - 困难难度（复杂聚合）
+    "financial_structured_hard_template_en": """
+### Task: Generate Complex Aggregation Query
+Generate a question that requires multiple aggregation steps or complex calculations 
+based on the structured financial data.
 
-### Available Information(values are in RMB million)
+### Available Information (values in RMB million)
 {session_context}
 
 ### Rules
-1. Operation: MUST use a two-step aggregation (e.g., AVG implies SUM and COUNT) OR a single aggregation with simple filtering (e.g., COUNT WHERE X > Y)
-2. Scope: Involve one column with 1-2 simple filtering conditions, or direct comparison of two aggregated results from the same table. MUST include explicit date range (e.g. “Dec 1-7 2023”) No complex joins across multiple implicit "tables".  
+1. Question must involve multiple aggregation functions or complex calculations
+2. Must include time-based comparisons or percentage changes
 3. Output JSON only:
 {{
   "question": "...?",
@@ -60,56 +97,12 @@ This question should involve either:
     ...
   ]
 }}
-4. Evidence must cover **all rows** used in the aggregation.  
-5. `answer` is the raw numeric result.  
-6. Ensure each evidence entry is a **5-tuple** with a **float** numeric value..
+4. Evidence must cover all rows used in the aggregation
+5. `answer` is the raw numeric result
 
 ### Example
 {{
-  "question": "What is the average daily net capital flow for Tonghuashun from Dec 1-7 2023?",
-  "answer": -22348.90,
-  "evidence": [
-    ["300033.SZ", "Tonghuashun", "2023-12-01", -225000000.00, "net_flow"],
-    ["300033.SZ", "Tonghuashun", "2023-12-04", -110000000.00, "net_flow"],
-    ["300033.SZ", "Tonghuashun", "2023-12-05", -486858200.00, "net_flow"],
-    ["300033.SZ", "Tonghuashun", "2023-12-06", -378564500.00, "net_flow"],
-    ["300033.SZ", "Tonghuashun", "2023-12-07", -364000000.00, "net_flow"]
-  ]
-}}
-""",
-    
-    "structured_hard_template_en": """
-### Task: Generate Complex Aggregative Query Question  
-Please generate a *complex, multi-step* aggregative query question based on the provided structured table data.
-This question should require:
-- Multiple nested aggregations or complex calculations across different columns.
-- Sophisticated filtering, potentially involving multiple conditions or implied relationships.
-- Time-based analysis or comparisons (e.g., year-over-year growth, trends over periods).
-- Potentially combine information from multiple conceptual "tables" if the context implies them (e.g., different sections of the data representing different entities or timeframes that need to be linked).
----
-
-### Available Information(values are in RMB million)
-{session_context}
-
-### Rules
-1. Operation: exactly one aggregate function.  
-2. Scope: single column + explicit date range (e.g. “Dec 1-7 2023”).  
-3. Output JSON only:
-{{
-  "question": "...?",
-  "answer": <float | int>,
-  "evidence": [
-    ["code", "sname", "YYYY-MM-DD", <value>, <metric>],
-    ...
-  ]
-}}
-4. Evidence must cover **all rows** used in the aggregation.  
-5. `answer` is the raw numeric result.  
-6. Ensure each evidence entry is a **5-tuple** with a **float** numeric value.
-
-### Example
-{{
-  "question": "Calculate the percentage change in total net capital flow for Tonghuashun from Dec 1-7 to Dec 22-28 2023 (rounded to two decimals).",
+  "question": "Calculate the percentage change in average daily net capital flow for Tonghuashun from December 1-7 to December 22-28, 2023?",
   "answer": 118.68,
   "evidence": [
     ["300033.SZ", "Tonghuashun", "2023-12-01", -225000000.00, "net_flow"],
@@ -121,6 +114,111 @@ This question should require:
   ]
 }}
 """,
+    
+    # 医疗领域 - 简单难度（具体值查询）
+    "medical_structured_easy_template_en": """
+### Task: Generate Specific Clinical Value Query
+Generate a question that retrieves a specific clinical value from the structured medical data.
+Focus on retrieving a single data point without aggregation, framed in a clinical context.
+
+### Available Information
+{session_context}
+
+### Rules
+1. Question must retrieve a single, specific clinical value
+2. Must specify the exact patient, time point, and clinical context
+3. Output JSON only:
+{{
+  "question": "...?",
+  "answer": <float | int>,
+  "evidence": [
+    ["PatientID", "time_event", "variable_name", <value>]
+  ]
+}}
+4. Evidence must contain exactly one row used in the answer
+5. `answer` is the raw numeric result
+
+### Example
+{{
+  "question": "What was the patient's white blood cell count (WBC) at midnight on June 21, 2023?",
+  "answer": 12.5,
+  "evidence": [
+    ["OPO1_P1000", "2023-06-21 00:00:00", "WBC", 12.5]
+  ]
+}}
+""",
+    
+    # 医疗领域 - 中等难度（简单聚合）
+    "medical_structured_medium_template_en": """
+### Task: Generate Clinical Aggregation Query
+Generate a question that requires a simple aggregation (AVG, MAX, MIN, SUM) 
+over multiple clinical values, framed in a clinical context.
+
+### Available Information
+{session_context}
+
+### Rules
+1. Question must involve a single aggregation function with clinical relevance
+2. Must specify a clear time range or clinical event
+3. Output JSON only:
+{{
+  "question": "...?",
+  "answer": <float | int>,
+  "evidence": [
+    ["PatientID", "time_event", "variable_name", <value>],
+    ...
+  ]
+}}
+4. Evidence must cover all rows used in the aggregation
+5. `answer` is the raw numeric result
+
+### Example
+{{
+  "question": "What was the patient's average heart rate between 8 a.m. and 4 p.m. on June 21, 2023, after surgery?",
+  "answer": 85.3,
+  "evidence": [
+    ["OPO1_P1000", "2023-06-21 08:00:00", "Heart Rate", 90],
+    ["OPO1_P1000", "2023-06-21 12:00:00", "Heart Rate", 82],
+    ["OPO1_P1000", "2023-06-21 16:00:00", "Heart Rate", 84]
+  ]
+}}
+""",
+    
+    # 医疗领域 - 困难难度（复杂聚合）
+    "medical_structured_hard_template_en": """
+### Task: Generate Complex Clinical Analysis Query
+Generate a question that requires multiple aggregation steps or complex clinical analysis 
+based on the structured medical data.
+
+### Available Information
+{session_context}
+
+### Rules
+1. Question must involve multiple clinical parameters or complex calculations
+2. Must include time-based comparisons or clinical correlations
+3. Output JSON only:
+{{
+  "question": "...?",
+  "answer": <float | int>,
+  "evidence": [
+    ["PatientID", "time_event", "variable_name", <value>],
+    ...
+  ]
+}}
+4. Evidence must cover all rows used in the analysis
+5. `answer` is the raw numeric result
+
+### Example
+{{
+  "question": "What was the percentage change in the patient's platelet count from 8 a.m. on June 1, 2023 to 8 a.m. on June 8, 2023?",
+  "answer": -35.2,
+  "evidence": [
+    ["OPO1_P1000", "2023-06-01 08:00:00", "Platelet Count", 250],
+    ["OPO1_P1000", "2023-06-08 08:00:00", "Platelet Count", 162]
+  ]
+}}
+""",
+    
 
 "sql_prompt_template": """
 You are an advanced AI assistant specializing in generating precise SQL queries based on natural language questions and provided table schemas and data. Your task is to generate two distinct SQL queries: one to retrieve the **answer** to the given question and another to identify the **evidence** supporting that answer, both from the provided tables.
