@@ -32,7 +32,6 @@ class MedicalPreprocessor:
         self.table_files = {
             'ChemistryEvents': 'ChemistryEvents.csv',
             'ABGEvents': 'ABGEvents.csv',
-            'CultureEvents': 'CultureEvents.csv',
             'CBCEvents': 'CBCEvents.csv'
         }
     
@@ -97,7 +96,7 @@ class MedicalPreprocessor:
         patient_index = {}
         
         for i, (patient_id, patient_data) in enumerate(grouped):
-            if i >= 1:  # Process only first 5 patients for testing
+            if i >= 20:
                 break
             logger.info(f"Processing patient: {patient_id}, events: {len(patient_data)}")
             

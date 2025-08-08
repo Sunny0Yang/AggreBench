@@ -65,7 +65,7 @@ class MedicalDialogueGenerator:
     
     def _load_preprocessed_data(self) -> ConversationDataset:
         """加载预处理数据"""
-        input_path = os.path.join(self.input_dir, "preprocessed_data.json")
+        input_path = os.path.join(self.input_dir, "filtered_data.json")
         if not os.path.exists(input_path):
             logger.error(f"预处理数据文件不存在: {input_path}")
             return None
