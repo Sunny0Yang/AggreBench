@@ -3,271 +3,370 @@ from typing import Dict
 SYSTEM_PROMPTS = {
     "financial": "You are a financial data analyst specializing in generating aggregation queries on structured financial tables. Your questions should focus on financial metrics like capital flows, stock performance, and market trends.",
 
-    "medical": "You are a medical data analyst with clinical expertise. Generate clinically meaningful questions based on structured medical data. Frame questions in the context of patient care and clinical decision-making.",
+    "medical": "You are a medical data analyst with clinical expertise. Generate scientifically meaningful questions based on structured medical data. Frame questions in the context of patient care and clinical decision-making.",
 }
 QA_GENERATION_PROMPTS = ({
-    # 金融领域 - 简单难度（具体值查询）
+    # 金融领域 - 简单难度（单次聚合）
     "financial_structured_easy_template_en": """
-### Task: Generate Specific Value Query
-Generate a question that retrieves a specific value from the structured financial data.
-Focus on retrieving a single data point without aggregation.
+### Task: Generate Financial Query with SQL
+Generate a question that requires a single aggregation (SUM, AVG, COUNT, MIN, MAX) 
+over a small set of values from the structured financial data and corresponding SQL queries.
 
 ### Available Information (values in RMB million)
 {session_context}
 
 ### Rules
-1. Question must retrieve a single, specific value from the data
-2. Must specify the exact entity and time point
-3. Output JSON only:
-{{
-  "question": "...?",
-  "answer": <float | int>,
-  "evidence": [
-    ["code", "sname", "YYYY-MM-DD", <value>, <metric>]
-  ]
-}}
-4. Evidence must contain exactly one row used in the answer
-5. `answer` is the raw numeric result
+1. **Question Generation Rules**:
+   - Question must involve exactly one aggregation function
+   - Scope limited to a single entity (stock) and short time range (1-3 days)
+   - No complex filtering conditions
+   - Question MUST clearly specify the stock name and code
 
-### Example
-{{
-  "question": "What was the net capital flow for Tonghuashun on December 1, 2023?",
-  "answer": 279000000.00,
-  "evidence": [
-    ["300033.SZ", "Tonghuashun", "2023-12-01", 279000000.00, "net_flow"]
-  ]
-}}
-""",
-    
-    # 金融领域 - 中等难度（简单聚合）
-    "financial_structured_medium_template_en": """
-### Task: Generate Simple Aggregation Query
-Generate a question that requires a simple aggregation (SUM, AVG, COUNT, MIN, MAX) 
-over multiple values from the structured financial data.
+2. **SQL Generation Rules**:
+   - Use EXACT variable names from the session context
+   - Ensure SQLite compatibility(sqlite3)
+   - SQL_ANSWER query must directly yield the answer to the question
+   - SQL_EVIDENCE query must retrieve all rows used to yield the answer
+   - Both queries must be syntactically correct and executable
 
-### Available Information (values in RMB million)
-{session_context}
+3. **Data-Specific Rules**:
+   - `code`: Stock code (e.g., "300033.SZ")
+   - `sname`: Stock name (e.g., "Tonghuashun")
+   - `tdate`: Transaction date (format: "YYYY-MM-DD")
+   - `value`: Numeric value (in RMB million)
+   - `metric`: Financial metric (e.g., "net_flow", "volume")
 
-### Rules
-1. Question must involve a single aggregation function
-2. Must specify a clear time range or entity group
-3. Output JSON only:
+4. Output JSON only:
 {{
   "question": "...?",
   "answer": <float | int>,
   "evidence": [
     ["code", "sname", "YYYY-MM-DD", <value>, <metric>],
     ...
-  ]
+  ],
+  "sql_answer_query": "SELECT ...",
+  "sql_evidence_query": "SELECT ..."
 }}
-4. Evidence must cover all rows used in the aggregation
-5. `answer` is the raw numeric result
 
 ### Example
 {{
-  "question": "What was the total net capital flow for Tonghuashun from December 1-7, 2023?",
-  "answer": -156442.27,
+  "question": "What was the average daily net capital flow for Tonghuashun (300033.SZ) from December 1-3, 2023?",
+  "answer": 185.0,
   "evidence": [
-    ["300033.SZ", "Tonghuashun", "2023-12-01", 279000000.00, "net_flow"],
-    ["300033.SZ", "Tonghuashun", "2023-12-04", 570000000.00, "net_flow"],
-    ["300033.SZ", "Tonghuashun", "2023-12-05", 48141800.00, "net_flow"],
-    ["300033.SZ", "Tonghuashun", "2023-12-06", 2435500.00, "net_flow"]
-  ]
+    ["300033.SZ", "Tonghuashun", "2023-12-01", 279.0, "net_flow"],
+    ["300033.SZ", "Tonghuashun", "2023-12-02", 150.0, "net_flow"],
+    ["300033.SZ", "Tonghuashun", "2023-12-03", 126.0, "net_flow"]
+  ],
+  "sql_answer_query": "SELECT AVG(value) FROM unified_data WHERE metric = 'net_flow' AND sname = 'Tonghuashun' AND code = '300033.SZ' AND tdate BETWEEN '2023-12-01' AND '2023-12-03'",
+  "sql_evidence_query": "SELECT * FROM unified_data WHERE metric = 'net_flow' AND sname = 'Tonghuashun' AND code = '300033.SZ' AND tdate BETWEEN '2023-12-01' AND '2023-12-03'"
+}}
+""",
+    
+    # 金融领域 - 中等难度（带条件聚合）
+    "financial_structured_medium_template_en": """
+### Task: Generate Conditional Financial Aggregation Query with SQL
+Generate a question that requires an aggregation with filtering conditions or grouping and corresponding SQL queries.
+
+### Available Information (values in RMB million)
+{session_context}
+
+### Rules
+1. **Question Generation Rules**:
+   - Use professional financial terminology
+   - Include specific filtering conditions (e.g., value ranges, metrics)
+   - Scope can include multiple entities or longer time range (4-7 days)
+   - Frame questions in a business context
+   - Question MUST clearly specify the stock name and code
+  
+2. **SQL Generation Rules**:
+   - Use EXACT variable names from the session context
+   - Ensure SQLite compatibility(sqlite3)
+   - SQL_ANSWER query must directly yield the answer to the question
+   - SQL_EVIDENCE query must retrieve all rows used to yield the answer
+   - Both queries must be syntactically correct and executable
+
+3. **Data-Specific Rules**:
+   - `code`: Stock code
+   - `sname`: Stock name
+   - `tdate`: Transaction date
+   - `value`: Numeric value
+   - `metric`: Financial metric
+
+4. Output JSON only:
+{{
+  "question": "...?",
+  "answer": <float | int>,
+  "evidence": [
+    ["code", "sname", "YYYY-MM-DD", <value>, <metric>],
+    ...
+  ],
+  "sql_answer_query": "SELECT ...",
+  "sql_evidence_query": "SELECT ..."
+}}
+
+### Example
+{{
+  "question": "What was the total net capital inflow for Alibaba Group (BABA.NYSE) in the first week of December 2023 for days with net flow above 200 million RMB?",
+  "answer": 1250.0,
+  "evidence": [
+    ["BABA.NYSE", "Alibaba Group", "2023-12-01", 350.0, "net_flow"],
+    ["BABA.NYSE", "Alibaba Group", "2023-12-03", 420.0, "net_flow"],
+    ["BABA.NYSE", "Alibaba Group", "2023-12-05", 480.0, "net_flow"],
+    ["BABA.NYSE", "Alibaba Group", "2023-12-02", 180.0, "net_flow"],
+    ["BABA.NYSE", "Alibaba Group", "2023-12-04", 150.0, "net_flow"],
+    ["BABA.NYSE", "Alibaba Group", "2023-12-06", 120.0, "net_flow"],
+    ["BABA.NYSE", "Alibaba Group", "2023-12-07", 90.0, "net_flow"]
+  ],
+  "sql_answer_query": "SELECT SUM(value) FROM unified_data WHERE metric = 'net_flow' AND sname = 'Alibaba Group' AND code = 'BABA.NYSE' AND tdate BETWEEN '2023-12-01' AND '2023-12-07' AND value > 200",
+  "sql_evidence_query": "SELECT * FROM unified_data WHERE metric = 'net_flow' AND sname = 'Alibaba Group' AND code = 'BABA.NYSE' AND tdate BETWEEN '2023-12-01' AND '2023-12-07'"
 }}
 """,
     
     # 金融领域 - 困难难度（复杂聚合）
     "financial_structured_hard_template_en": """
-### Task: Generate Complex Aggregation Query
-Generate a question that requires multiple aggregation steps or complex calculations 
-based on the structured financial data.
+### Task: Generate Complex Financial Analysis Query with SQL
+Generate a financial question requiring multiple aggregation steps and corresponding SQL queries.
 
 ### Available Information (values in RMB million)
 {session_context}
 
 ### Rules
-1. Question must involve multiple aggregation functions or complex calculations
-2. Must include time-based comparisons or percentage changes
-3. Output JSON only:
+1. **Question Generation Rules**:
+   - Use professional financial terminology
+   - Include multiple metrics and time-based comparisons
+   - Scope must include multiple entities and/or longer time ranges (2+ weeks)
+   - Frame questions in a business analysis context requiring complex calculations
+   - Question MUST clearly specify the stock names and codes
+   - Include at least two different aggregation functions or subqueries
+
+2. **SQL Generation Rules**:
+   - Use EXACT variable names from the session context
+   - Ensure SQLite compatibility(sqlite3)
+   - SQL_ANSWER query must directly yield the answer to the question
+   - SQL_EVIDENCE query must retrieve all rows used to yield the answer
+   - Both queries must be syntactically correct and executable
+
+3. **Data-Specific Rules**:
+   - `code`: Stock code
+   - `sname`: Stock name
+   - `tdate`: Transaction date
+   - `value`: Numeric value
+   - `metric`: Financial metric
+
+4. Output JSON only:
 {{
   "question": "...?",
   "answer": <float | int>,
   "evidence": [
     ["code", "sname", "YYYY-MM-DD", <value>, <metric>],
     ...
-  ]
+  ],
+  "sql_answer_query": "SELECT ...",
+  "sql_evidence_query": "SELECT ..."
 }}
-4. Evidence must cover all rows used in the aggregation
-5. `answer` is the raw numeric result
 
 ### Example
 {{
-  "question": "Calculate the percentage change in average daily net capital flow for Tonghuashun from December 1-7 to December 22-28, 2023?",
-  "answer": 118.68,
+  "question": "What is the percentage difference between Tencent Holdings (700.HK)'s average daily trading volume and PetroChina (601857.SH)'s average daily trading volume during the first two weeks of December 2023?",
+  "answer": 35.8,
   "evidence": [
-    ["300033.SZ", "Tonghuashun", "2023-12-01", -225000000.00, "net_flow"],
-    ["300033.SZ", "Tonghuashun", "2023-12-04", -110000000.00, "net_flow"],
-    ["300033.SZ", "Tonghuashun", "2023-12-05", -486858200.00, "net_flow"],
-    ["300033.SZ", "Tonghuashun", "2023-12-06", -378564500.00, "net_flow"],
-    ["300033.SZ", "Tonghuashun", "2023-12-07", -364000000.00, "net_flow"],
-    ["300033.SZ", "Tonghuashun", "2023-12-22", -342013070.00, "net_flow"]
-  ]
+    ["700.HK", "Tencent Holdings", "2023-12-01", 1250.0, "volume"],
+    ["700.HK", "Tencent Holdings", "2023-12-04", 1320.0, "volume"],
+    ["700.HK", "Tencent Holdings", "2023-12-07", 1180.0, "volume"],
+    ["700.HK", "Tencent Holdings", "2023-12-11", 1420.0, "volume"],
+    ["700.HK", "Tencent Holdings", "2023-12-14", 1380.0, "volume"],
+    ["601857.SH", "PetroChina", "2023-12-01", 850.0, "volume"],
+    ["601857.SH", "PetroChina", "2023-12-04", 920.0, "volume"],
+    ["601857.SH", "PetroChina", "2023-12-07", 880.0, "volume"],
+    ["601857.SH", "PetroChina", "2023-12-11", 1050.0, "volume"],
+    ["601857.SH", "PetroChina", "2023-12-14", 980.0, "volume"]
+  ],
+  "sql_answer_query": "SELECT ((SELECT AVG(value) FROM unified_data WHERE metric = 'volume' AND sname = 'Tencent Holdings' AND code = '700.HK' AND tdate BETWEEN '2023-12-01' AND '2023-12-14') - (SELECT AVG(value) FROM unified_data WHERE metric = 'volume' AND sname = 'PetroChina' AND code = '601857.SH' AND tdate BETWEEN '2023-12-01' AND '2023-12-14') ) / (SELECT AVG(value) FROM unified_data WHERE metric = 'volume' AND sname = 'PetroChina' AND code = '601857.SH' AND tdate BETWEEN '2023-12-01' AND '2023-12-14') * 100",
+  "sql_evidence_query": "SELECT * FROM unified_data WHERE metric = 'volume' AND ((sname = 'Tencent Holdings' AND code = '700.HK') OR (sname = 'PetroChina' AND code = '601857.SH')) AND tdate BETWEEN '2023-12-01' AND '2023-12-14'"
 }}
 """,
     
-    # 医疗领域 - 简单难度（具体值查询）
+    # 医疗领域 - 简单难度（单次聚合）
     "medical_structured_easy_template_en": """
-### Task: Generate Specific Clinical Value Query
-Generate a question that retrieves a specific clinical value from the structured medical data.
-Focus on retrieving a single data point without aggregation, framed in a clinical context.
-
-### Available Information
-{session_context}
-
-### Rules
-1. Question must retrieve a single, specific clinical value
-2. Must specify the exact patient, time point, and clinical context
-3. Output JSON only:
-{{
-  "question": "...?",
-  "answer": <float | int>,
-  "evidence": [
-    ["PatientID", "time_event", "variable_name", <value>]
-  ]
-}}
-4. Evidence must contain exactly one row used in the answer
-5. `answer` is the raw numeric result
-
-### Example
-{{
-  "question": "What was the patient's white blood cell count (WBC) at midnight on June 21, 2023?",
-  "answer": 12.5,
-  "evidence": [
-    ["OPO1_P1000", "2023-06-21 00:00:00", "WBC", 12.5]
-  ]
-}}
-""",
+    ### Task: Generate Simple Clinical Aggregation Question with SQL
+    Generate a question that requires a single aggregation (AVG, MAX, MIN, SUM) 
+    over a small set of clinical values with specific time references and corresponding SQL queries.
     
-    # 医疗领域 - 中等难度（简单聚合）
+    ### Available Information
+    {session_context}
+    
+    ### Rules
+    1. **Question Generation Rules**:
+       - Use scientifically precise and clinically relevant terminology. Example: "serum glucose level" instead of "Glucose"
+       - Include specific clinical parameters and time ranges (within one day or a few hours)
+       - Frame questions in a clinical context
+       - Question MUST clearly specify the patient ID
+       - Limited to a single parameter type
+    
+    2. **SQL Generation Rules**:
+       - Use EXACT variable names from the session context
+       - Ensure SQLite compatibility(sqlite3)
+       - SQL_ANSWER query must calculate the answer to the question
+       - SQL_EVIDENCE query must retrieve all rows used to yield the answer
+       - Both queries must be syntactically correct and executable
+    
+    3. **Data-Specific Rules**:
+       - `PatientID`: Patient identifier (e.g., "OPO1_P1000")
+       - `time_event`: Measurement time (format: "YYYY-MM-DD HH:MM:SS")
+       - `variable_name`: Clinical parameter name (e.g., "O2SAT", "Glucose")
+       - `value`: Numeric measurement value
+       - `table_type`: Data source (e.g., "ABGEvents", "ChemistryEvents")
+    
+    4. Output JSON only:
+    {{
+      "question": "...?",
+      "answer": <float | int>,
+      "evidence": [
+        ["PatientID", "time_stamp", "variable_name", <value>, "table_type"],
+        ...
+      ],
+      "sql_answer_query": "SELECT ...",
+      "sql_evidence_query": "SELECT ..."
+    }}
+    
+    ### Example
+    {{
+      "question": "What was patient OPO1_P1000's average arterial oxygen saturation (O2SAT) during SIMV ventilation between 08:00 and 16:00 on June 21, 2023?",
+      "answer": 95.7,
+      "evidence": [
+        ["OPO1_P1000", "2023-06-21 08:00:00", "SIMV-O2SAT", 96.0, "ABGEvents"],
+        ["OPO1_P1000", "2023-06-21 12:00:00", "SIMV-O2SAT", 95.0, "ABGEvents"],
+        ["OPO1_P1000", "2023-06-21 16:00:00", "SIMV-O2SAT", 96.0, "ABGEvents"]
+      ],
+      "sql_answer_query": "SELECT AVG(value) FROM unified_data WHERE PatientID = 'OPO1_P1000' AND variable_name = 'SIMV-O2SAT' AND table_type = 'ABGEvents' AND time_event BETWEEN '2023-06-21 08:00:00' AND '2023-06-21 16:00:00'",
+      "sql_evidence_query": "SELECT * FROM unified_data WHERE PatientID = 'OPO1_P1000' AND variable_name = 'SIMV-O2SAT' AND table_type = 'ABGEvents' AND time_event BETWEEN '2023-06-21 08:00:00' AND '2023-06-21 16:00:00'"
+    }}
+    """,
+    
+    # 医疗领域 - 中等难度（带条件聚合）
     "medical_structured_medium_template_en": """
-### Task: Generate Clinical Aggregation Query
-Generate a question that requires a simple aggregation (AVG, MAX, MIN, SUM) 
-over multiple clinical values, framed in a clinical context.
+### Task: Generate Conditional Clinical Question with SQL
+Generate a question that requires an aggregation with filtering conditions and specific time references and corresponding SQL queries.
 
 ### Available Information
 {session_context}
 
 ### Rules
-1. Question must involve a single aggregation function with clinical relevance
-2. Must specify a clear time range or clinical event
-3. Output JSON only:
+1. **Question Generation Rules**:
+   - Use scientifically precise and clinically relevant terminology. Example: "serum glucose level" instead of "Glucose"
+   - Question must involve one aggregation function, and include at least one filtering condition with explicit time references (2-5 days)
+   - Frame questions in a clinical context with conditions
+   - If using clinical terms (e.g., "postoperative"), include specific dates in parentheses
+   - Question MUST clearly specify the patient ID
+   - May include multiple related parameters
+
+2. **SQL Generation Rules**:
+   - Use EXACT variable names from the session context
+   - Ensure SQLite compatibility(sqlite3)
+   - SQL_ANSWER query must calculate the answer to the question
+   - SQL_EVIDENCE query must retrieve all rows to yield the answer
+   - Both queries must be syntactically correct and executable
+
+3. **Data-Specific Rules**:
+   - `PatientID`: Patient identifier
+   - `time_event`: Measurement time (format: "YYYY-MM-DD HH:MM:SS")
+   - `variable_name`: Clinical parameter name
+   - `value`: Numeric measurement value
+   - `table_type`: Data source (e.g., "ABGEvents", "ChemistryEvents")
+
+4. Output JSON only:
 {{
   "question": "...?",
   "answer": <float | int>,
   "evidence": [
-    ["PatientID", "time_event", "variable_name", <value>],
+    ["PatientID", "time_event", "variable_name", <value>, "table_type"],
     ...
-  ]
+  ],
+  "sql_answer_query": "SELECT ...",
+  "sql_evidence_query": "SELECT ..."
 }}
-4. Evidence must cover all rows used in the aggregation
-5. `answer` is the raw numeric result
 
 ### Example
 {{
-  "question": "What was the patient's average heart rate between 8 a.m. and 4 p.m. on June 21, 2023, after surgery?",
-  "answer": 85.3,
+  "question": "What was the minimum arterial pH value observed for patient OPO1_P10004 during SIMV ventilation from 23:10 on April 12, 2036 to 09:05 on April 15, 2036, when the pH was below 7.35?",
+  "answer": 7.11,
   "evidence": [
-    ["OPO1_P1000", "2023-06-21 08:00:00", "Heart Rate", 90],
-    ["OPO1_P1000", "2023-06-21 12:00:00", "Heart Rate", 82],
-    ["OPO1_P1000", "2023-06-21 16:00:00", "Heart Rate", 84]
-  ]
+    ["OPO1_P10004", "2036-04-12 23:10:00", "SIMV-PH", 7.11, "ABGEvents"],
+    ["OPO1_P10004", "2036-04-13 02:03:00", "SIMV-PH", 7.37, "ABGEvents"],
+    ["OPO1_P10004", "2036-04-14 07:26:00", "SIMV-PH", 7.34, "ABGEvents"],
+    ["OPO1_P10004", "2036-04-15 05:52:00", "SIMV-PH", 7.35, "ABGEvents"],
+    ["OPO1_P10004", "2036-04-15 09:05:00", "SIMV-PH", 7.33, "ABGEvents"]
+  ],
+  "sql_answer_query": "SELECT MIN(value) FROM unified_data WHERE PatientID = 'OPO1_P10004' AND variable_name = 'SIMV-PH' AND table_type = 'ABGEvents' AND time_event BETWEEN '2036-04-12 23:10:00' AND '2036-04-15 09:05:00' AND value < 7.35",
+  "sql_evidence_query": "SELECT * FROM unified_data WHERE PatientID = 'OPO1_P10004' AND variable_name = 'SIMV-PH' AND table_type = 'ABGEvents' AND time_event BETWEEN '2036-04-12 23:10:00' AND '2036-04-15 09:05:00'"
 }}
 """,
     
     # 医疗领域 - 困难难度（复杂聚合）
     "medical_structured_hard_template_en": """
-### Task: Generate Complex Clinical Analysis Query
-Generate a question that requires multiple aggregation steps or complex clinical analysis 
-based on the structured medical data.
+### Task: Generate Complex Clinical Analysis Question with SQL
+Generate a clinical question requiring multiple aggregation steps and corresponding SQL queries.
 
 ### Available Information
 {session_context}
 
 ### Rules
-1. Question must involve multiple clinical parameters or complex calculations
-2. Must include time-based comparisons or clinical correlations
-3. Output JSON only:
+1. **Question Generation Rules**:
+   - Use scientifically precise and clinically relevant terminology. Example: "serum glucose level" instead of "Glucose"
+   - Question must involve at least two aggregation functions or complex calculations
+   - Include time-based comparisons with explicit date ranges (7+ days)
+   - Frame questions in a clinical analysis context requiring advanced statistical understanding
+   - Question MUST clearly specify the patient ID
+   - Must include multiple parameters or complex relationships between parameters
+
+2. **SQL Generation Rules**:
+   - Use EXACT variable names from the session context
+   - Ensure SQLite compatibility(sqlite3)
+   - SQL_ANSWER query must calculate the answer to the question
+   - SQL_EVIDENCE query must retrieve all rows to yield the answer
+   - Both queries must be syntactically correct and executable
+
+3. **Data-Specific Rules**:
+   - `PatientID`: Patient identifier
+   - `time_event`: Measurement time (format: "YYYY-MM-DD HH:MM:SS")
+   - `variable_name`: Clinical parameter name
+   - `value`: Numeric measurement value
+   - `table_type`: Data source (e.g., "ABGEvents", "ChemistryEvents")
+
+4. Output JSON only:
 {{
   "question": "...?",
   "answer": <float | int>,
   "evidence": [
-    ["PatientID", "time_event", "variable_name", <value>],
+    ["PatientID", "time_stamp", "variable_name", <value>, "table_type"],
     ...
-  ]
+  ],
+  "sql_answer_query": "SELECT ...",
+  "sql_evidence_query": "SELECT ..."
 }}
-4. Evidence must cover all rows used in the analysis
-5. `answer` is the raw numeric result
 
 ### Example
 {{
-  "question": "What was the percentage change in the patient's platelet count from 8 a.m. on June 1, 2023 to 8 a.m. on June 8, 2023?",
-  "answer": -35.2,
+  "question": "For patient OPO1_P1000, calculate the percentage change in the ratio of average arterial oxygen saturation (O2SAT) to average partial pressure of carbon dioxide (PCO2) between the first week of June 2023 (June 1-7) and the second week (June 8-14)?",
+  "answer": -8.2,
   "evidence": [
-    ["OPO1_P1000", "2023-06-01 08:00:00", "Platelet Count", 250],
-    ["OPO1_P1000", "2023-06-08 08:00:00", "Platelet Count", 162]
-  ]
+    ["OPO1_P1000", "2023-06-01 08:00:00", "SIMV-O2SAT", 98.0, "ABGEvents"],
+    ["OPO1_P1000", "2023-06-01 08:00:00", "SIMV-PCO2", 38.0, "ABGEvents"],
+    ["OPO1_P1000", "2023-06-03 12:00:00", "SIMV-O2SAT", 96.0, "ABGEvents"],
+    ["OPO1_P1000", "2023-06-03 12:00:00", "SIMV-PCO2", 40.0, "ABGEvents"],
+    ["OPO1_P1000", "2023-06-07 16:00:00", "SIMV-O2SAT", 97.0, "ABGEvents"],
+    ["OPO1_P1000", "2023-06-07 16:00:00", "SIMV-PCO2", 39.0, "ABGEvents"],
+    ["OPO1_P1000", "2023-06-08 08:00:00", "SIMV-O2SAT", 93.0, "ABGEvents"],
+    ["OPO1_P1000", "2023-06-08 08:00:00", "SIMV-PCO2", 42.0, "ABGEvents"],
+    ["OPO1_P1000", "2023-06-10 12:00:00", "SIMV-O2SAT", 94.0, "ABGEvents"],
+    ["OPO1_P1000", "2023-06-10 12:00:00", "SIMV-PCO2", 44.0, "ABGEvents"],
+    ["OPO1_P1000", "2023-06-14 16:00:00", "SIMV-O2SAT", 92.0, "ABGEvents"],
+    ["OPO1_P1000", "2023-06-14 16:00:00", "SIMV-PCO2", 45.0, "ABGEvents"]
+  ],
+  "sql_answer_query": "SELECT (((SELECT AVG(o2.value) FROM unified_data o2 WHERE o2.PatientID = 'OPO1_P1000' AND o2.variable_name = 'SIMV-O2SAT' AND o2.table_type = 'ABGEvents' AND o2.time_event BETWEEN '2023-06-08 00:00:00' AND '2023-06-14 23:59:59') / (SELECT AVG(pco2.value) FROM unified_data pco2 WHERE pco2.PatientID = 'OPO1_P1000' AND pco2.variable_name = 'SIMV-PCO2' AND pco2.table_type = 'ABGEvents' AND pco2.time_event BETWEEN '2023-06-08 00:00:00' AND '2023-06-14 23:59:59')) - ((SELECT AVG(o2.value) FROM unified_data o2 WHERE o2.PatientID = 'OPO1_P1000' AND o2.variable_name = 'SIMV-O2SAT' AND o2.table_type = 'ABGEvents' AND o2.time_event BETWEEN '2023-06-01 00:00:00' AND '2023-06-07 23:59:59') / (SELECT AVG(pco2.value) FROM unified_data pco2 WHERE pco2.PatientID = 'OPO1_P1000' AND pco2.variable_name = 'SIMV-PCO2' AND pco2.table_type = 'ABGEvents' AND pco2.time_event BETWEEN '2023-06-01 00:00:00' AND '2023-06-07 23:59:59'))) / ((SELECT AVG(o2.value) FROM unified_data o2 WHERE o2.PatientID = 'OPO1_P1000' AND o2.variable_name = 'SIMV-O2SAT' AND o2.table_type = 'ABGEvents' AND o2.time_event BETWEEN '2023-06-01 00:00:00' AND '2023-06-07 23:59:59') / (SELECT AVG(pco2.value) FROM unified_data pco2 WHERE pco2.PatientID = 'OPO1_P1000' AND pco2.variable_name = 'SIMV-PCO2' AND pco2.table_type = 'ABGEvents' AND pco2.time_event BETWEEN '2023-06-01 00:00:00' AND '2023-06-07 23:59:59')) * 100",
+  "sql_evidence_query": "SELECT * FROM unified_data WHERE PatientID = 'OPO1_P1000' AND (variable_name = 'SIMV-O2SAT' OR variable_name = 'SIMV-PCO2') AND table_type = 'ABGEvents' AND time_event BETWEEN '2023-06-01 00:00:00' AND '2023-06-14 23:59:59'"
 }}
 """,
-    
-
-"sql_prompt_template": """
-You are an advanced AI assistant specializing in generating precise SQL queries based on natural language questions and provided table schemas and data. Your task is to generate two distinct SQL queries: one to retrieve the **answer** to the given question and another to identify the **evidence** supporting that answer, both from the provided tables.
-
----
-
-### **Instructions:**
-
-1.  **Analyze the Question:** Carefully understand the user's question to identify the specific information being requested.
-2.  **Examine the Tables:** Review the provided table schemas and their sample data to determine which tables and columns are relevant to answer the question and find supporting evidence.
-3.  **Generate SQL Queries (`SQL_ANSWER` and `SQL_EVIDENCE`):**
-    * Construct syntactically correct SQL queries that accurately reference the provided tables and columns.
-    * **Crucial for Column Names:** If a column name contains **special characters** (e.g., `[`, `]`, ` ` (space), `-`), or if it's a **reserved keyword** in SQL, you **MUST** enclose it in **double quotes** (e.g., `"Column Name With Spaces"`, `"资金流向[20231201]"`). This applies to all clauses (SELECT, FROM, WHERE, etc.).
-    * Prioritize queries that return the most concise and direct answer.
-    * Use appropriate SQL clauses (e.g., `SELECT`, `FROM`, `WHERE`, `JOIN`, `GROUP BY`, `ORDER BY`, `WITH`, `HAVING`, aggregate functions) as needed.
-    * **SQLite Compatibility Note (CRITICAL):** You are generating SQL for **SQLite3**, and ensure all mathematical and logical expressions are correctly parenthesized to avoid syntax errors.
-4.  **Specifics for Answer SQL Query (`SQL_ANSWER`):**
-    * This query should directly yield the answer to the user's question.
-
-5.  **Specifics for Evidence SQL Query (`SQL_EVIDENCE`):**
-    * This query should retrieve the data points from the tables that serve as **direct evidence** for the answer.
-    * For each row selected as evidence, ensure you `SELECT` an entire row.
-    * This query should ideally return the foundational facts or figures that lead to the answer.
-    * Consider returning relevant columns from the rows that contain the key information.
-
----
-### **Table Information:**
-
-{tables}
-
----
-
-### **Question:**
-
-{question}
-
----
-
-### **Output Format:**
-
-Provide your response in the following format. Ensure there are no additional explanations or text, only the two SQL queries.
-
-```sql
-SQL_ANSWER:
-{{sql_text}};
-
-SQL_EVIDENCE:
-{{sql_text}};
-"""
 })
 
 PERSONA = ({

@@ -15,7 +15,7 @@ class SqlEngine:
         """
         cur = self.conn.cursor()
         cur.execute("DROP TABLE IF EXISTS unified_data")
-        
+        self.logger.info("Dropped existing unified_data table")
         # 创建统一表结构
         if domain == "financial":
             create_sql = """
@@ -30,8 +30,8 @@ class SqlEngine:
         elif domain == "medical":
             create_sql = """
             CREATE TABLE unified_data (
-                patient_id TEXT,
-                timestamp TEXT,
+                PatientID TEXT,
+                time_event TEXT,
                 variable_name TEXT,
                 value REAL,
                 table_type TEXT

@@ -128,12 +128,12 @@ class QuestionGenerator:
             print(f"\n请检查这次生成的问题。输入 'y' 标记为【偏好问题】（保存进数据集）；输入 'n' 标记为【不喜欢】（保存进cache），并重新生成；输入 'r' 重新生成（不保存进cache）；按回车键标记为【已生成】（保存进数据集）。")
             char = input("输入 'y', 'n', 'r'或回车键继续...\n").strip().lower()
             if char == "y":
-                self.cache_manager.add_qa(qa_dict, status="liked")
+                self.cache_manager.add_qa(qa_dict, status="liked", sql_info=qa_dict.get("sql_info"))
                 self.cache_manager.save_cache()
                 self.logger.info(f"QA {qa_dict['qa_id']} marked as 'liked'.")
                 return qa_dict, selected_sessions
             elif char == "n":
-                self.cache_manager.add_qa(qa_dict, status="disliked")
+                self.cache_manager.add_qa(qa_dict, status="disliked", sql_info=qa_dict.get("sql_info"))
                 self.cache_manager.save_cache()
                 self.logger.info(f"QA {qa_dict['qa_id']} marked as 'disliked'. Re-generating...")
                 return None, None # Signal to re-generate
@@ -141,12 +141,12 @@ class QuestionGenerator:
                 self.logger.info(f"QA {qa_dict['qa_id']} marked as 'rejected'. Re-generating...")
                 return None, None # Signal to re-generate
             else:
-                self.cache_manager.add_qa(qa_dict, status="generated")
+                self.cache_manager.add_qa(qa_dict, status="generated", sql_info=qa_dict.get("sql_info"))
                 self.cache_manager.save_cache()
                 self.logger.info(f"QA {qa_dict['qa_id']} marked as 'generated'.")
                 return qa_dict, selected_sessions
         else:
-            self.cache_manager.add_qa(qa_dict, status="generated")
+            self.cache_manager.add_qa(qa_dict, status="generated", sql_info=qa_dict.get("sql_info"))
             self.cache_manager.save_cache()
             self.logger.info(f"QA {qa_dict['qa_id']} added as 'generated'.")
             return qa_dict, selected_sessions
@@ -161,15 +161,16 @@ class QuestionGenerator:
                 for idx, table in enumerate(session.tables):
                     context += f"Table {idx} (Headers: {', '.join(table.headers)}):\n"
                     for row_idx, row in enumerate(table.rows):
-                        # 通用行表示方法，不依赖特定列名
-                        if isinstance(row, dict):
-                            # 字典格式的行
+                        # 添加表格类型到行数据
+                        if self.domain == "financial":
                             row_str = ", ".join(f"{k}: {v}" for k, v in row.items())
-                        elif isinstance(row, list):
-                            # 列表格式的行，与表头对应
-                            row_str = ", ".join(f"{header}: {value}" for header, value in zip(table.headers, row))
-                        else:
-                            row_str = str(row)
+                        elif self.domain == "medical":
+                            # 检查表格类型
+                            table_type = getattr(table, 'table_type', 'Unknown')
+                            # 添加表格类型
+                            row['table_type'] = table_type
+                            row_str = ", ".join(f"{k}: {v}" for k, v in row.items())
+
                         
                         context += f"  Row {row_idx}: {row_str}\n"
             else:
@@ -181,7 +182,7 @@ class QuestionGenerator:
                     context += f"Turn {turn.id}: {turn.speaker}: {turn.content}\n"
             context += "\n"
         return context
-
+    
     def _build_additional_guidance(self, preferred_qas: List[Dict], disliked_qas: List[Dict]) -> str:
         """
         构建额外的指导信息，包含偏好问题、不偏好问题。
@@ -277,7 +278,9 @@ class QuestionGenerator:
         {
             "question_text": str,
             "answer_text": float | int,
-            "evidence": List[Dict]  # 改为字典列表，更灵活
+            "evidence": List[Dict],
+            "sql_answer_query": str,
+            "sql_evidence_query": str
         }
         """
         try:
@@ -290,9 +293,12 @@ class QuestionGenerator:
 
             data = json.loads(cleaned_response)
 
-            question_text = data.pop("question", None)
-            answer_text   = data.pop("answer", None)
+            question_text = data.get("question", "")
+            answer_text = data.get("answer", 0.0)
+            sql_answer_query = data.get("sql_answer_query", "")
+            sql_evidence_query = data.get("sql_evidence_query", "")
 
+            # 处理答案文本
             if isinstance(answer_text, str):
                 num_match = re.search(r"-?\d+(?:\.\d+)?", answer_text)
                 if num_match:
@@ -304,37 +310,33 @@ class QuestionGenerator:
             else:
                 answer_text = 0.0
 
-            # 使用字典列表存储证据，更灵活
+            # 处理证据
             evidence = data.get("evidence", [])
-            if not isinstance(evidence, list):
-                evidence = []
-            
-            # 确保每个证据项是字典
             validated_evidence = []
             for item in evidence:
-                if isinstance(item, dict):
+                if isinstance(item, list) and len(item) >= 5:
+                    validated_evidence.append({
+                        "PatientID": str(item[0]),
+                        "time_event": str(item[1]),
+                        "variable_name": str(item[2]),
+                        "value": float(item[3]),
+                        "table_type": str(item[4])
+                    })
+                elif isinstance(item, dict):
                     validated_evidence.append(item)
-                elif isinstance(item, list):
-                    # 尝试转换为字典
-                    try:
-                        if len(item) == 2:  # 键值对列表
-                            validated_evidence.append(dict(item))
-                        else:  # 无法转换，保留原始格式
-                            validated_evidence.append({"raw": item})
-                    except:
-                        validated_evidence.append({"raw": item})
-                else:
-                    validated_evidence.append({"raw": item})
             
             return {
                 "question_text": question_text,
                 "answer_text": answer_text,
-                "evidence": validated_evidence
+                "evidence": validated_evidence,
+                "sql_info": {
+                    "sql_answer_query": sql_answer_query,
+                    "sql_evidence_query": sql_evidence_query
+                }
             }
         except Exception as e:
             self.logger.error(f"解析响应时发生错误: {e}")
             return None
-
 class BatchValidator:
     """
     负责对已生成的问题答案对进行SQL验证和智能修正的类。
@@ -368,7 +370,8 @@ class BatchValidator:
             question = qa_item.get("question_text")
             answer_llm = qa_item.get("answer_text")
             evidence_llm = qa_item.get("evidence", [])
-
+            sql_answer_query = qa_item["sql_info"].get("sql_answer_query", "")
+            sql_evidence_query = qa_item["sql_info"].get("sql_evidence_query", "")
             conversation_id = qa_item.get("conversation_id")
             session_ids = qa_item.get("session_ids")
 
@@ -398,6 +401,8 @@ class BatchValidator:
                                         question=question,
                                         answer_llm=answer_llm,
                                         evidence_llm=evidence_llm,
+                                        sql_answer_query=sql_answer_query,
+                                        sql_evidence_query=sql_evidence_query,
                                         sessions=selected_sessions
                                     )
             
@@ -406,15 +411,16 @@ class BatchValidator:
             cache_manager.save_cache()
             self.logger.info(f"QA {qa_item.get('qa_id')} validation complete. Status: {sql_info.get('sql_status')}")
 
-    def validate_and_correct(self, question: str, answer_llm: Any, 
-                             evidence_llm: List[Dict], sessions: List[Session]) -> Dict:
+    def validate_and_correct(self, question: str, answer_llm: Any, evidence_llm: List[Dict],
+                             sql_answer_query: str, sql_evidence_query: str,
+                             sessions: List[Session]) -> Dict:
         """
         执行验证：LLM生成的SQL查询与数据库结果对比。
         """
         result = {
-            "sql_status": "not_yet",
-            "sql_answer_query": None,
-            "sql_evidence_query": None,
+            "sql_status": None,
+            "sql_answer_query": sql_answer_query,
+            "sql_evidence_query": sql_evidence_query,
             "sql_answer": None,
             "sql_evidence": None,
             "error": None
@@ -431,27 +437,24 @@ class BatchValidator:
         
         try:
             # 创建统一表
-            self.logger.debug(f"###Tables###:{tables}")
+            self.logger.debug(f"###TableSample###:{tables[0]}")
             self.sql_engine.create_table_from_struct(tables, domain=self.domain)
             
-            # 生成SQL查询
-            sql_prompt = self._generate_sql_prompt(question, self.domain)
-            full_sql = self._generate_sql_from_llm(sql_prompt)
-            
-            # 解析双查询
-            answer_query, evidence_query = self._parse_double_query(full_sql)
-            result["sql_answer_query"] = answer_query
-            result["sql_evidence_query"] = evidence_query
-            
+            if not sql_answer_query or not sql_evidence_query:
+                self.logger.warning("Missing pre-generated SQL queries, skipping validation.")
+                result["sql_status"] = "skipped"
+                return result
+            self.logger.debug(f"###SQLAnswerQuery###:{sql_answer_query}")
+            self.logger.debug(f"###SQLEvidenceQuery###:{sql_evidence_query}")
             # 执行答案查询
-            answer_results = self.sql_engine.execute_query(answer_query)
+            answer_results = self.sql_engine.execute_query(sql_answer_query)
             answer_sql = answer_results[0][list(answer_results[0].keys())[0]] if answer_results and answer_results[0] else None
             result["sql_answer"] = answer_sql
-            
+            self.logger.debug(f"###SQLAnswer###:{answer_sql}")
             # 执行证据查询
-            evidence_results = self.sql_engine.execute_query(evidence_query)
+            evidence_results = self.sql_engine.execute_query(sql_evidence_query)
             result["sql_evidence"] = evidence_results
-            
+            self.logger.debug(f"###SQLEvidence###:{evidence_results}")
             # 执行验证
             answer_match = self.validator.compare_answers(answer_llm, answer_sql)
             evidence_match = self.validator.compare_evidence(evidence_llm, evidence_results, self.domain)
@@ -500,7 +503,7 @@ class BatchValidator:
             
             Database Schema:
             Table: unified_data
-            Columns: patient_id (TEXT), timestamp (TEXT), variable_name (TEXT), value (REAL), table_type (TEXT)
+            Columns: PatientID (TEXT), time_event (TEXT), variable_name (TEXT), value (REAL), table_type (TEXT)
             
             Requirements:
             1. First query (SQL_ANSWER): Calculate the answer to the question.
